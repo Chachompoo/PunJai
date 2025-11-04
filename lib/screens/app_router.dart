@@ -7,6 +7,10 @@ import 'package:punjai_app/screens/forgot_password_screen.dart';
 import 'package:punjai_app/screens/verify_code_screen.dart';
 import 'package:punjai_app/screens/password_reset_success_screen.dart';
 import 'package:punjai_app/screens/update_password_screen.dart';
+import 'package:punjai_app/screens/profile_screen.dart'; 
+import 'package:punjai_app/screens/edit_profile_screen.dart';
+
+
 
 class AppRouter {
   static Route<dynamic> generateRoute(RouteSettings settings) {
@@ -30,6 +34,14 @@ class AppRouter {
       case UpdatePasswordScreen.routeName:
         final email = settings.arguments as String;
         return MaterialPageRoute(builder: (_) => UpdatePasswordScreen(email: email));
+
+      case ProfileScreen.routeName:
+        final uid = settings.arguments as String;
+        return MaterialPageRoute(builder: (_) => ProfileScreen(uid: uid));
+
+      case EditProfileScreen.routeName:
+        return MaterialPageRoute(builder: (_) => const EditProfileScreen());
+
 
       default:
         return MaterialPageRoute(
