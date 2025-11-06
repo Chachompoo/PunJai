@@ -3,13 +3,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:punjai_app/screens/login_screen.dart';
 import 'package:punjai_app/screens/profile_screen.dart';
+import 'package:punjai_app/screens/create_post_page.dart';
+import 'package:punjai_app/screens/feed_page.dart';
+import 'package:punjai_app/screens/notifications_page.dart';
+import 'package:punjai_app/screens/search_page.dart';
+import 'package:punjai_app/screens/ChatsListPage.dart';
+import 'package:punjai_app/widgets/punjai_appbar.dart';
+import 'package:punjai_app/screens/top_donors_page.dart';
 
-/// ------------------------------------------------------------
-/// 🏠 HomeScreen (PunJai)
-/// - หน้าหลักหลัง Login สำเร็จ
-/// - เพิ่มระบบ "จัดอันดับผู้บริจาคสูงสุด" (Top Donors)
-/// - ปุ่ม Navigation ด้านล่าง: Feed / ค้นหา / เพิ่มโพสต์ / Top Donors / โปรไฟล์
-/// ------------------------------------------------------------
 class HomeScreen extends StatefulWidget {
   static const routeName = '/home';
   const HomeScreen({super.key});
@@ -20,29 +21,68 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _auth = FirebaseAuth.instance;
+  int _selectedIndex = 0;
 
-  int _selectedIndex = 0; // สำหรับ BottomNavigationBar
-
-  // ฟังก์ชันออกจากระบบ
-  Future<void> _logout(BuildContext context) async {
-    await FirebaseAuth.instance.signOut();
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-    );
+  @override
+  void initState() {
+    super.initState();
+    if (_auth.currentUser == null) {
+      Future.microtask(() {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (route) => false,
+        );
+      });
+    }
   }
 
-  /// ---------------------------------------------
-  /// 🔸 หน้ารายชื่อผู้บริจาคสูงสุด (Top Donors)
-  /// ---------------------------------------------
+  Widget _buildCurrentPage() {
+  switch (_selectedIndex) {
+    case 0:
+      return const FeedPage();
+    case 1:
+      return const SearchPage();
+    case 2:
+      return _buildPostTypeSelector(context);
+    case 3:
+      return const TopDonorsPage();
+    case 4:
+      // ✅ ปุ่มโปรไฟล์อยู่ตรงนี้
+      return StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final user = snapshot.data;
+          if (user == null) {
+            Future.microtask(() {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            });
+            return const Center(child: Text('กำลังออกจากระบบ... 💗'));
+          }
+          return ProfileScreen(uid: user.uid);
+        },
+      );
+    default:
+      return const Center(child: Text('หน้าที่ไม่พบค่ะ 🚫'));
+  }
+}
+
+
   Widget _buildTopDonors() {
     return Container(
-      color: const Color(0xFFFFF7E5), // 💛 โทนเหลืองอ่อน (Donation)
+      color: const Color(0xFFFFF7E5),
       child: StreamBuilder<QuerySnapshot>(
-        // ดึงข้อมูลจาก Firestore collection 'users' แล้ว sort ตาม donationPoints
         stream: FirebaseFirestore.instance
             .collection('users')
-            .orderBy('donationPoints', descending: true)
+            .orderBy('points', descending: true)
             .limit(10)
             .snapshots(),
         builder: (context, snapshot) {
@@ -52,32 +92,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
             return const Center(
-              child: Text(
-                'ยังไม่มีข้อมูลผู้บริจาคค่ะ 💛',
-                style: TextStyle(fontSize: 16, color: Colors.black54),
-              ),
+              child: Text('ยังไม่มีข้อมูลผู้บริจาคค่ะ 💛'),
             );
           }
 
           final users = snapshot.data!.docs;
-
           return ListView.builder(
             padding: const EdgeInsets.all(16),
             itemCount: users.length,
             itemBuilder: (context, index) {
               final data = users[index].data() as Map<String, dynamic>;
-
-              // อ่านฟิลด์ข้อมูลจาก Firestore
               final name = data['name'] ?? 'ไม่ระบุชื่อ';
               final username = data['username'] ?? '';
               final profileImage = data['profileImage'] ??
                   'https://cdn-icons-png.flaticon.com/512/149/149071.png';
-              final points = data['donationPoints'] ?? 0;
+              final points = data['points'] ?? 0;
+
 
               return Card(
                 margin: const EdgeInsets.symmetric(vertical: 8),
-                color: Colors.white,
-                elevation: 2,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16)),
                 child: ListTile(
@@ -85,13 +118,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     backgroundImage: NetworkImage(profileImage),
                     radius: 26,
                   ),
-                  title: Text(
-                    name,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, color: Colors.black87),
-                  ),
+                  title: Text(name,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, color: Colors.black87)),
                   subtitle: Text('@$username',
-                      style: const TextStyle(color: Colors.black54)),
+                      style: const TextStyle(color: Colors.grey)),
                   trailing: Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -107,14 +138,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                   ),
-                  onTap: () {
-                    // กดดูโปรไฟล์ของ user นั้น
-                    Navigator.pushNamed(
-                      context,
-                      ProfileScreen.routeName,
-                      arguments: data['uid'],
-                    );
-                  },
                 ),
               );
             },
@@ -124,46 +147,95 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// ---------------------------------------------
-  /// 🔸 สลับหน้าจอจาก BottomNavigationBar
-  /// ---------------------------------------------
-  Widget _buildCurrentPage() {
-    switch (_selectedIndex) {
-      case 0:
-        return const Center(child: Text('📜 หน้าฟีด (Feed ยังไม่สร้าง)'));
-      case 1:
-        return const Center(child: Text('🔍 หน้าค้นหา (ยังไม่สร้าง)'));
-      case 2:
-        return const Center(child: Text('➕ เพิ่มโพสต์ (ยังไม่สร้าง)'));
-      case 3:
-        return _buildTopDonors(); // ✅ หน้าจัดอันดับผู้บริจาคสูงสุด
-      case 4:
-        final user = _auth.currentUser;
-        if (user == null) {
-          return const Center(child: Text('ไม่พบข้อมูลผู้ใช้'));
-        }
-        // ✅ หน้าโปรไฟล์ของตัวเอง
-        return ProfileScreen(uid: user.uid);
-      default:
-        return const Center(child: Text('ไม่พบหน้า'));
-    }
+  Widget _buildPostTypeSelector(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('เลือกประเภทโพสต์ 💗',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 30),
+          _buildTypeButton(context,
+              title: 'บริจาคสิ่งของ',
+              color: const Color(0xFFFFF7CC),
+              accent: const Color(0xFFFFD84D),
+              icon: Icons.volunteer_activism,
+              type: 'donate'),
+          const SizedBox(height: 20),
+          _buildTypeButton(context,
+              title: 'ขอรับบริจาค',
+              color: const Color(0xFFFFD6E8),
+              accent: const Color(0xFFFF8FBF),
+              icon: Icons.card_giftcard,
+              type: 'request'),
+          const SizedBox(height: 20),
+          _buildTypeButton(context,
+              title: 'แลกเปลี่ยนสิ่งของ',
+              color: const Color(0xFFD6F0FF),
+              accent: const Color(0xFF7EC8E3),
+              icon: Icons.swap_horiz,
+              type: 'swap'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTypeButton(
+    BuildContext context, {
+    required String title,
+    required Color color,
+    required Color accent,
+    required IconData icon,
+    required String type,
+  }) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => CreatePostPage(type: type)),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 6,
+              offset: const Offset(2, 4),
+            )
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: accent, size: 36),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(title,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.bold)),
+            ),
+            const Icon(Icons.arrow_forward_ios, color: Colors.black54),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
+      appBar: _selectedIndex == 0 ? const PunjaiAppBar() : null,
       body: _buildCurrentPage(),
-
-      /// ---------------------------------------------
-      /// 🔹 Bottom Navigation Bar (สไตล์ IG)
-      /// ---------------------------------------------
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: (index) {
-          setState(() {
-            _selectedIndex = index;
-          });
+          setState(() => _selectedIndex = index);
         },
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF43593E),
@@ -173,11 +245,8 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Search'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.add_box_outlined), label: 'Add'),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.emoji_events_outlined),
-              label: 'Top Donors'), // 🏆 แทน Chat เดิม
+          BottomNavigationBarItem(icon: Icon(Icons.add_box_outlined), label: 'Add'),
+          BottomNavigationBarItem(icon: Icon(Icons.emoji_events_outlined), label: 'Top Donors'),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
       ),

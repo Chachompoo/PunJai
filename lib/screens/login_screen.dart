@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart'; 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'home_screen.dart';
@@ -32,47 +32,63 @@ class _LoginScreenState extends State<LoginScreen> {
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
 
-    // ✅ ตรวจจาก Firestore โดยตรง
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .where('email', isEqualTo: email)
-        .where('password', isEqualTo: password)
-        .get();
+    // ✅ Login ผ่าน Firebase Auth โดยตรง
+    UserCredential userCredential = await FirebaseAuth.instance
+        .signInWithEmailAndPassword(email: email, password: password);
 
-    if (snapshot.docs.isEmpty) {
-      setState(() => _errorMessage = '❌ อีเมลหรือรหัสผ่านไม่ถูกต้อง');
+    final user = userCredential.user;
+    if (user == null) {
+      setState(() => _errorMessage = 'ไม่สามารถเข้าสู่ระบบได้ กรุณาลองใหม่อีกครั้ง');
       return;
     }
 
-    // ✅ login สำเร็จ
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (context) => const HomeScreen()),
-    );
+    // ✅ ดึงข้อมูลจาก Firestore ด้วย uid โดยตรง (ไม่ใช้ where แล้ว)
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
 
+    if (!userDoc.exists) {
+      // ถ้ายังไม่มีข้อมูล user → สร้างเอกสารใหม่
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'uid': user.uid,
+        'email': user.email,
+        'createdAt': FieldValue.serverTimestamp(),
+        'firstname': '',
+        'lastname': '',
+        'username': '',
+        'followers': 0,
+        'following': 0,
+        'rating': 0.0,
+        'points': 0,
+      });
+    }
+
+    if (context.mounted) {
+      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+    }
+
+  } on FirebaseAuthException catch (e) {
+    if (e.code == 'user-not-found') {
+      setState(() => _errorMessage = 'ไม่พบบัญชีผู้ใช้นี้');
+    } else if (e.code == 'wrong-password') {
+      setState(() => _errorMessage = 'รหัสผ่านไม่ถูกต้อง');
+    } else {
+      setState(() => _errorMessage = 'เกิดข้อผิดพลาด: ${e.message}');
+    }
   } catch (e) {
-    setState(() {
-      _errorMessage = 'เกิดข้อผิดพลาด: $e';
-    });
+    setState(() => _errorMessage = 'เกิดข้อผิดพลาด: $e');
   } finally {
     setState(() => _isLoading = false);
   }
 }
 
-  // 🩷 เพิ่ม transition สไลด์
+
   void _navigateToForgotPassword(BuildContext context) {
-    Navigator.of(context).push(PageRouteBuilder(
-      transitionDuration: const Duration(milliseconds: 350),
-      pageBuilder: (_, __, ___) => const ForgotPasswordScreen(),
-      transitionsBuilder: (_, animation, __, child) {
-        const begin = Offset(1.0, 0.0); // จากขวาเข้าซ้าย
-        const end = Offset.zero;
-        const curve = Curves.easeInOut;
-        final tween =
-            Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-        return SlideTransition(position: animation.drive(tween), child: child);
-      },
-    ));
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const ForgotPasswordScreen()),
+    );
   }
 
   @override
@@ -147,7 +163,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     },
                   ),
 
-                  // Forgot password (เปลี่ยนให้มี animation)
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
@@ -161,7 +176,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 10),
 
                   if (_errorMessage != null)

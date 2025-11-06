@@ -1,13 +1,14 @@
 import 'dart:io';
+import 'package:awesome_snackbar_content/awesome_snackbar_content.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'settings_page.dart';
 
 class EditProfileScreen extends StatefulWidget {
   static const routeName = '/edit_profile';
-
   const EditProfileScreen({super.key});
 
   @override
@@ -18,12 +19,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _auth = FirebaseAuth.instance;
   final _db = FirebaseFirestore.instance;
 
-  // สีธีม PunJai พาสเทล
-  static const Color kBg = Color(0xFFFDECF2);
-  static const Color kPrimary = Color(0xFFFF6FA5);
-  static const Color kText = Color(0xFF39424E);
-
-  // Controllers
   final _firstNameCtrl = TextEditingController();
   final _lastNameCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
@@ -31,6 +26,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _bioCtrl = TextEditingController();
 
   bool _loading = false;
+  bool _isPressed = false;
   File? _imageFile;
   String? _profileImageUrl;
 
@@ -59,7 +55,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     });
   }
 
-  /// 📷 เลือกรูปจากเครื่อง
   Future<void> _pickImage() async {
     final picked =
         await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 70);
@@ -68,7 +63,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
-  /// ☁️ อัปโหลดรูปขึ้น Firebase Storage แล้วคืน URL
   Future<String> _uploadImage(File file) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw Exception('User not found');
@@ -77,7 +71,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return await ref.getDownloadURL();
   }
 
-  /// 💾 อัปเดตข้อมูลใน Firestore
   Future<void> _saveProfile() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
@@ -85,7 +78,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _loading = true);
 
     try {
-      // ถ้ามีเลือกรูปใหม่ → อัปโหลดก่อน
       String imageUrl = _profileImageUrl ?? '';
       if (_imageFile != null) {
         imageUrl = await _uploadImage(_imageFile!);
@@ -101,28 +93,101 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       });
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('✅ บันทึกข้อมูลสำเร็จ')),
+
+      _showFloatingHeart(context);
+
+      final snackBar = SnackBar(
+        elevation: 0,
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        content: AwesomeSnackbarContent(
+          title: 'สำเร็จแล้ว 💗',
+          message: 'โปรไฟล์ของคุณได้รับการอัปเดตเรียบร้อย!',
+          contentType: ContentType.success,
+          color: const Color(0xFFFFC1D0),
+        ),
       );
-      Navigator.pop(context); // กลับไปหน้าโปรไฟล์
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(snackBar);
+
+      await Future.delayed(const Duration(milliseconds: 1500));
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 400),
+            pageBuilder: (_, __, ___) => const SettingsPage(),
+            transitionsBuilder: (_, anim, __, child) => FadeTransition(
+              opacity: anim,
+              child: child,
+            ),
+          ),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('เกิดข้อผิดพลาด: $e')),
+      final snackBar = SnackBar(
+        elevation: 0,
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        content: AwesomeSnackbarContent(
+          title: 'Error!',
+          message: 'เกิดข้อผิดพลาด: $e',
+          contentType: ContentType.failure,
+        ),
       );
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(snackBar);
     } finally {
       setState(() => _loading = false);
     }
   }
 
+  /// 💕 หัวใจลอยตอนบันทึก
+  void _showFloatingHeart(BuildContext context) {
+    final overlay = Overlay.of(context);
+    if (overlay == null) return;
+
+    final overlayEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        top: MediaQuery.of(context).size.height * 0.45,
+        left: MediaQuery.of(context).size.width * 0.45,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: -100),
+          duration: const Duration(milliseconds: 900),
+          curve: Curves.easeOutCubic,
+          builder: (context, value, child) => Opacity(
+            opacity: 1 - (value.abs() / 100),
+            child: Transform.translate(
+              offset: Offset(0, value),
+              child: const Icon(Icons.favorite,
+                  size: 48, color: Color(0xFFFF8FBF)),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    overlay.insert(overlayEntry);
+    Future.delayed(const Duration(milliseconds: 950), overlayEntry.remove);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: kBg,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        foregroundColor: kText,
-        title: const Text('Edit Profile'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          'Edit Profile',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+        ),
         centerTitle: true,
       ),
       body: _loading
@@ -148,7 +213,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         onTap: _pickImage,
                         child: Container(
                           decoration: const BoxDecoration(
-                            color: kPrimary,
+                            color: Color(0xFFFF8FBF),
                             shape: BoxShape.circle,
                           ),
                           padding: const EdgeInsets.all(6),
@@ -158,27 +223,64 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
 
-                  _buildTextField('ชื่อจริง', _firstNameCtrl),
-                  _buildTextField('นามสกุล', _lastNameCtrl),
-                  _buildTextField('ชื่อผู้ใช้', _usernameCtrl),
-                  _buildTextField('เบอร์โทรศัพท์', _phoneCtrl, keyboardType: TextInputType.phone),
-                  _buildTextField('คำแนะนำสั้น ๆ (Bio)', _bioCtrl, maxLines: 3),
+                  // 🌸 ฟิลด์กรอกมน ๆ พร้อมเงา
+                  _buildSmoothField(_firstNameCtrl, "First Name"),
+                  const SizedBox(height: 18),
+                  _buildSmoothField(_lastNameCtrl, "Last Name"),
+                  const SizedBox(height: 18),
+                  _buildSmoothField(_usernameCtrl, "Username"),
+                  const SizedBox(height: 18),
+                  _buildSmoothField(_phoneCtrl, "Phone Number",
+                      keyboardType: TextInputType.phone),
+                  const SizedBox(height: 18),
+                  _buildSmoothField(_bioCtrl, "Bio",
+                      maxLines: 3),
 
                   const SizedBox(height: 28),
-                  ElevatedButton(
-                    onPressed: _saveProfile,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: kPrimary,
-                      minimumSize: const Size(double.infinity, 48),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+
+                  GestureDetector(
+                    onTapDown: (_) => setState(() => _isPressed = true),
+                    onTapUp: (_) async {
+                      await Future.delayed(const Duration(milliseconds: 100));
+                      setState(() => _isPressed = false);
+                      if (!_loading) _saveProfile();
+                    },
+                    onTapCancel: () => setState(() => _isPressed = false),
+                    child: AnimatedScale(
+                      duration: const Duration(milliseconds: 150),
+                      scale: _isPressed ? 0.95 : 1.0,
+                      curve: Curves.easeOut,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: double.infinity,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFF8FBF),
+                          borderRadius: BorderRadius.circular(40),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.pink.withOpacity(0.25),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: _loading
+                              ? const CircularProgressIndicator(
+                                  color: Colors.white)
+                              : const Text(
+                                  "Save Changes",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                        ),
                       ),
-                    ),
-                    child: const Text(
-                      'บันทึกการเปลี่ยนแปลง',
-                      style: TextStyle(color: Colors.white, fontSize: 16),
                     ),
                   ),
                 ],
@@ -187,25 +289,65 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
-  Widget _buildTextField(String label, TextEditingController controller,
-      {int maxLines = 1, TextInputType keyboardType = TextInputType.text}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: TextField(
-        controller: controller,
-        maxLines: maxLines,
-        keyboardType: keyboardType,
-        decoration: InputDecoration(
-          labelText: label,
-          filled: true,
-          fillColor: Colors.white,
-          labelStyle: const TextStyle(color: kText),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
+  /// 🌷 ช่องกรอกมน ๆ แบบโฟกัสแล้วขยายเหมือนหน้าเปลี่ยนรหัส + label ด้านบน
+Widget _buildSmoothField(TextEditingController controller, String label,
+    {int maxLines = 1, TextInputType keyboardType = TextInputType.text}) {
+  return StatefulBuilder(
+    builder: (context, setInnerState) {
+      bool isFocused = false;
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 🌸 ข้อความด้านบนช่อง
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8, left: 4),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF43593E),
+              ),
+            ),
           ),
-        ),
-      ),
-    );
-  }
+
+          // 🌸 ช่องกรอกมน ๆ
+          Focus(
+            onFocusChange: (focus) => setInnerState(() => isFocused = focus),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              transform: Matrix4.identity()..scale(isFocused ? 1.02 : 1.0),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFDF6F9),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: isFocused
+                        ? const Color(0xFFFFC0CB).withOpacity(0.25)
+                        : Colors.black.withOpacity(0.05),
+                    blurRadius: isFocused ? 10 : 6,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: controller,
+                maxLines: maxLines,
+                keyboardType: keyboardType,
+                style: const TextStyle(fontSize: 16),
+                decoration: const InputDecoration(
+                  hintText: '',
+                  border: InputBorder.none,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
 }
