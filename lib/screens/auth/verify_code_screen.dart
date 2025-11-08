@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:audioplayers/audioplayers.dart';
-import '../widgets/fade_slide_route.dart';
+import '../../widgets/fade_slide_route.dart';
 import 'password_reset_success_screen.dart';
 
 class VerifyCodeScreen extends StatefulWidget {
@@ -75,7 +75,7 @@ class _VerifyCodeScreenState extends State<VerifyCodeScreen> {
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          FadeSlidePageRoute(
+          FadeSlideRoute(
             page: PasswordResetSuccessScreen(email: widget.email),
           ),
         );

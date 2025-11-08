@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:punjai_app/screens/profile_screen.dart';
+import 'package:punjai_app/screens/profile/profile_screen.dart';
 
 class ChatRoomPage extends StatefulWidget {
   final String chatId;

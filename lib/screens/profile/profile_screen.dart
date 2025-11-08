@@ -2,8 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'settings_page.dart';
-import 'post_detail_page.dart';
+import '../posts/post_detail_page.dart';
 import 'package:video_player/video_player.dart';
+import 'followers_following_page.dart';
 
 // ===============================
 // 🔇 วิดีโอ preview ไม่มีเสียง เล่นวน
@@ -99,9 +100,36 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   Widget build(BuildContext context) {
     final me = _auth.currentUser;
-
+    final isOwner = me != null && me.uid == widget.uid;
+    Future<int> _getPostCount() async {
+  final snap = await _db
+      .collection('posts')
+      .where('ownerId', isEqualTo: widget.uid)
+      .get();
+  return snap.docs.length;
+}
     return Scaffold(
-      backgroundColor: Colors.white,
+  backgroundColor: Colors.white,
+  appBar: isOwner
+      ? null // ถ้าเป็นของตัวเอง — ไม่มี AppBar (เหมือนเดิม)
+      : AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0.8,
+          centerTitle: true,
+          title: const Text(
+            "โปรไฟล์",
+            style: TextStyle(
+              color: Color(0xFF1F2937),
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
+            ),
+          ),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: Color(0xFF1F2937)),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
       body: SafeArea(
         child: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           future: _loadUserDoc(),
@@ -115,6 +143,7 @@ class _ProfileScreenState extends State<ProfileScreen>
 
             final data = snapshot.data!.data()!;
             final isOwner = me != null && me.uid == widget.uid;
+
 
             final profileImage = (data['profileImage'] as String?) ??
                 'https://cdn-icons-png.flaticon.com/512/149/149071.png';
@@ -133,35 +162,35 @@ class _ProfileScreenState extends State<ProfileScreen>
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               children: [
                 // 🔹 Header
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const SizedBox(width: 20),
-                    const Text(
-                      "โปรไฟล์",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                        color: kText,
-                      ),
+                if (isOwner)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const SizedBox(width: 20),
+                  const Text(
+                    "โปรไฟล์",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                      color: kText,
                     ),
-                    if (isOwner)
-                      IconButton(
-                        icon: const Icon(
-                          Icons.settings,
-                          size: 28,
-                          color: kText,
-                        ),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const SettingsPage()),
-                          );
-                        },
-                      ),
-                  ],
-                ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.settings,
+                      size: 28,
+                      color: kText,
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SettingsPage()),
+                      );
+                    },
+                  ),
+                ],
+              ),
+
 
                 const SizedBox(height: 20),
 
@@ -201,17 +230,41 @@ class _ProfileScreenState extends State<ProfileScreen>
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    _StatPill(label: 'posts', value: postsCount.toString()),
+                    FutureBuilder<int>(
+                      future: _getPostCount(),
+                      builder: (context, snapshot) {
+                        final count = snapshot.data ?? 0;
+                        return _StatPill(label: 'posts', value: count.toString());
+                      },
+                    ),
                     const SizedBox(width: 8),
-                    _StatPill(
-                        label: 'followers',
-                        value: followersList.length.toString()),
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => FollowersFollowingPage(uid: widget.uid, showFollowers: true),
+                          ),
+                        );
+                      },
+                      child: _StatPill(label: 'followers', value: followersList.length.toString()),
+                    ),
                     const SizedBox(width: 8),
-                    _StatPill(
-                        label: 'following',
-                        value: followingList.length.toString()),
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => FollowersFollowingPage(uid: widget.uid, showFollowers: false),
+                          ),
+                        );
+                      },
+                      child: _StatPill(label: 'following', value: followingList.length.toString()),
+                    ),
                   ],
                 ),
+
+
 
                 // 🔹 Follow button (for others)
                 const SizedBox(height: 18),
@@ -335,13 +388,54 @@ class _PostGrid extends StatelessWidget {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: AspectRatio(
-                  aspectRatio: 1,
-                  child: imgs.isNotEmpty
-                      ? Image.network(imgs.first, fit: BoxFit.cover)
-                      : (vids.isNotEmpty
-                          ? SilentVideoPreview(url: vids.first)
-                          : const Icon(Icons.image_not_supported)),
+  aspectRatio: 1,
+  child: imgs.isNotEmpty
+      ? Image.network(imgs.first, fit: BoxFit.cover)
+      : (vids.isNotEmpty
+          ? SilentVideoPreview(url: vids.first)
+          : Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: post['type'] == 'request'
+                      ? [Color(0xFFFFC1D8), Color(0xFFFF8FBF)] // 🌸 สีชมพูพาสเทลเหมือนหน้า Search
+                      : post['type'] == 'donate'
+                          ? [Color(0xFFFFEFA9), Color(0xFFFFD84D)]
+                          : [Color(0xFFB5E2FF), Color(0xFF7EC8E3)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      post['type'] == 'request'
+                          ? Icons.card_giftcard
+                          : post['type'] == 'donate'
+                              ? Icons.volunteer_activism
+                              : Icons.autorenew,
+                      color: Colors.white,
+                      size: 36,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      post['type'] == 'request'
+                          ? 'ขอรับ'
+                          : post['type'] == 'donate'
+                              ? 'บริจาค'
+                              : 'แลกเปลี่ยน',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )),
+),
               ),
             );
           },

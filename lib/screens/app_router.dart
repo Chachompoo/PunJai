@@ -1,38 +1,39 @@
 import 'package:flutter/material.dart';
 
 // 🔹 Auth & User
-import 'login_screen.dart';
-import 'signup_screen.dart';
-import 'welcome_screen.dart';
-import 'forgot_password_screen.dart';
-import 'verify_code_screen.dart';
-import 'password_reset_success_screen.dart';
-import 'update_password_screen.dart';
+import 'auth/login_screen.dart';
+import 'auth/signup_screen.dart';
+import 'welcome/welcome_screen.dart';
+import 'auth/forgot_password_screen.dart';
+import 'auth/verify_code_screen.dart';
+import 'auth/password_reset_success_screen.dart';
+import 'auth/update_password_screen.dart';
 
 // 🔹 Home & Profile
-import 'home_screen.dart';
-import 'profile_screen.dart';
-import 'edit_profile_screen.dart';
+import 'home/home_screen.dart';
+import 'profile/profile_screen.dart';
+import 'profile/edit_profile_screen.dart';
 
 // 🔹 Main Features
-import 'feed_page.dart';
-import 'create_post_page.dart';
-import 'post_detail_page.dart';
-import 'my_requests_page.dart';
-import 'confirmations_page.dart';
-import 'top_donors_page.dart';
-import 'search_page.dart';
+import 'home/feed_page.dart';
+import 'posts/create_post_page.dart';
+import 'posts/post_detail_page.dart';
+import 'posts/my_requests_page.dart';
+import 'confirmations/confirmations_page.dart';
+import 'home/top_donors_page.dart';
+import 'home/search_page.dart';
+
 
 // 🔹 Chat
-import 'ChatsListPage.dart';
-import 'ChatRoomPage.dart';
+import 'chat/ChatsListPage.dart';
+import 'chat/ChatRoomPage.dart';
 
 // 🔹 Notifications
-import 'notifications_page.dart';
+import 'notifications/notifications_page.dart';
 
 // 🔹 settings
-import 'package:punjai_app/screens/settings_page.dart';
-import 'package:punjai_app/screens/history_page.dart';
+import 'package:punjai_app/screens/profile/settings_page.dart';
+import 'package:punjai_app/screens/profile/history_page.dart';
 
 
 class AppRouter {

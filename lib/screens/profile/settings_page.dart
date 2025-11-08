@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:punjai_app/screens/update_password_screen.dart';
-import 'package:punjai_app/screens/history_page.dart';
-import 'package:punjai_app/screens/login_screen.dart';
-import 'package:punjai_app/screens/edit_profile_screen.dart';
+import 'package:punjai_app/screens/auth/update_password_screen.dart';
+import 'package:punjai_app/screens/profile/history_page.dart';
+import 'package:punjai_app/screens/auth/login_screen.dart';
+import 'package:punjai_app/screens/profile/edit_profile_screen.dart';
 
 class SettingsPage extends StatelessWidget {
   static const routeName = '/settings';

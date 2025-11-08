@@ -7,7 +7,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'screens/app_router.dart';
 import 'firebase_options.dart';
-import 'screens/login_screen.dart';
+import 'screens/auth/login_screen.dart';
+import 'screens/welcome/welcome_screen.dart'; // 💗 เพิ่มตรงนี้
+import 'screens/home/home_screen.dart'; // เผื่อใช้ตอนเช็ก login
 
 // ✅ สร้าง instance ของ plugin สำหรับแสดง notification
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -19,26 +21,19 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 Future<void> _setupNotification() async {
   final FirebaseMessaging messaging = FirebaseMessaging.instance;
 
-  // ✅ ขออนุญาตแจ้งเตือนจากผู้ใช้
-  await messaging.requestPermission(
-    alert: true,
-    badge: true,
-    sound: true,
-  );
+  await messaging.requestPermission(alert: true, badge: true, sound: true);
 
-  // ✅ ดึง FCM Token ปัจจุบัน
   final token = await messaging.getToken();
   print('📱 Current FCM Token: $token');
 
-  // ✅ บันทึก token ลง Firestore (เพื่อใช้ส่ง push จริงภายหลัง)
   final user = FirebaseAuth.instance.currentUser;
   if (user != null && token != null) {
-    await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
-      'fcmToken': token,
-    });
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .set({'fcmToken': token}, SetOptions(merge: true)); // ✅ แก้ตรงนี้
   }
 
-  // ✅ ตั้งค่า Channel สำหรับ Android
   const AndroidInitializationSettings androidSettings =
       AndroidInitializationSettings('@mipmap/ic_launcher');
 
@@ -47,10 +42,9 @@ Future<void> _setupNotification() async {
 
   await flutterLocalNotificationsPlugin.initialize(initSettings);
 
-  // ✅ กำหนด Channel สำหรับ Android Notification
   const AndroidNotificationChannel channel = AndroidNotificationChannel(
-    'punjai_channel', // id
-    'Punjai Notifications', // ชื่อ channel
+    'punjai_channel',
+    'Punjai Notifications',
     description: 'ช่องสำหรับการแจ้งเตือนของ Punjai',
     importance: Importance.high,
   );
@@ -60,7 +54,6 @@ Future<void> _setupNotification() async {
           AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
 
-  // ✅ ตั้งค่า handler เมื่อมีข้อความเข้าระหว่างเปิดแอป
   FirebaseMessaging.onMessage.listen((RemoteMessage message) {
     final notification = message.notification;
     final android = notification?.android;
@@ -83,26 +76,18 @@ Future<void> _setupNotification() async {
     }
   });
 
-  // ✅ เมื่อผู้ใช้กด notification ตอนแอปปิดอยู่ → เปิดแอปกลับมา
   FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
     debugPrint('🔔 Notification Clicked: ${message.notification?.title}');
-    // สามารถนำทางไปยังหน้าที่เกี่ยวข้องได้ เช่น:
-    // Navigator.pushNamed(context, '/notifications');
   });
 }
+
 
 /// ------------------------------------------------------------
 /// 🎯 main()
 /// ------------------------------------------------------------
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // ✅ เริ่มต้น Firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  // ✅ Setup ระบบแจ้งเตือน
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await _setupNotification();
 
   runApp(const PunjaiApp());
@@ -124,8 +109,19 @@ class PunjaiApp extends StatelessWidget {
         scaffoldBackgroundColor: Colors.white,
         fontFamily: 'Poppins',
       ),
+
+      // ✅ เริ่มที่หน้า Welcome ก่อน
+      initialRoute: '/welcome',
+
+      // ✅ routes หลักของแอป
+      routes: {
+        '/welcome': (context) => const WelcomeScreen(),
+        '/login': (context) => const LoginScreen(),
+        '/home': (context) => const HomeScreen(),
+      },
+
+      // ✅ รองรับระบบ Route อื่น ๆ ของแอปชมพู (ถ้ามี)
       onGenerateRoute: AppRouter.generateRoute,
-      initialRoute: LoginScreen.routeName,
     );
   }
 }

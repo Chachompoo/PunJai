@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'verify_code_screen.dart';
-import '../services/email_service.dart';
-import '../widgets/fade_slide_route.dart'; // ✅ route animation ที่เราสร้าง
+import '../../services/email_service.dart';
+import '../../widgets/fade_slide_route.dart'; // ✅ route animation ที่เราสร้าง
 
 class ForgotPasswordScreen extends StatefulWidget {
   static const routeName = '/forgot-password';
@@ -66,7 +66,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       if (mounted) {
         Navigator.push(
           context,
-          FadeSlidePageRoute(page: VerifyCodeScreen(email: email)),
+          FadeSlideRoute(page: VerifyCodeScreen(email: email)),
         );
       }
     } catch (e) {

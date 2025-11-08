@@ -85,4 +85,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'punjai-3a73b.firebasestorage.app',
     measurementId: 'G-8BBZ2ZXXQ1',
   );
+
 }
