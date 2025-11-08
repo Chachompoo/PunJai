@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HistoryDetailPage extends StatefulWidget {
   final Map<String, dynamic> data;
@@ -30,7 +31,7 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
       vsync: this,
     );
     _fadeAnimations = List.generate(
-      3,
+      4,
       (i) => CurvedAnimation(
         parent: _fadeController,
         curve: Interval(i * 0.2, 1.0, curve: Curves.easeOut),
@@ -69,27 +70,36 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
     String statusLabel;
     switch (status) {
       case 'accepted':
+      case 'in_progress':
+      case 'shipping': // ✅ เพิ่มบรรทัดนี้
         statusColor = kOrange;
         statusLabel = 'กำลังดำเนินการ';
         break;
+
       case 'completed':
         statusColor = kGreen;
         statusLabel = 'เสร็จสิ้น';
         break;
+
       default:
         statusColor = kGrey;
         statusLabel = 'รอดำเนินการ';
     }
 
-    // 🌿 สเต็ปไทม์ไลน์
+
+    /// 🌿 สเต็ปไทม์ไลน์ (แสดงตามสถานะจริง)
     final List<Map<String, dynamic>> timelineSteps = [
       {
         'label': 'รอเจ้าของตอบรับ',
-        'active': status == 'pending' || status == 'accepted' || status == 'completed',
+        'active': ['pending', 'accepted', 'in_progress', 'shipping', 'completed'].contains(status),
       },
       {
         'label': 'กำลังดำเนินการ',
-        'active': status == 'accepted' || status == 'completed',
+        'active': ['accepted', 'in_progress', 'shipping', 'completed'].contains(status),
+      },
+      {
+        'label': 'จัดส่งพัสดุแล้ว',
+        'active': ['shipping', 'completed'].contains(status),
       },
       {
         'label': 'เสร็จสิ้น',
@@ -97,9 +107,11 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
       },
     ];
 
+    // 🎀 หาขั้นตอนปัจจุบัน
     int currentStep = 0;
-    if (status == 'accepted') currentStep = 1;
-    if (status == 'completed') currentStep = 2;
+    if (['accepted', 'in_progress'].contains(status)) currentStep = 1;
+    if (status == 'shipping') currentStep = 2;
+    if (status == 'completed') currentStep = 3;
 
     return Scaffold(
       backgroundColor: kBg,
@@ -230,6 +242,7 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
                     ],
                   ),
                   const SizedBox(height: 24),
+                  
 
                   // 🌿 Timeline Section
                   const Text(
@@ -315,85 +328,293 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
                       );
                     }),
                   ),
+                  
                   const SizedBox(height: 24),
-
-                  // ปุ่มต่าง ๆ
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.chat_bubble_outline, size: 20),
-                          label: const Text("แชท"),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: kPrimary,
-                            side: const BorderSide(color: kPrimary, width: 1.3),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                          ),
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("เปิดแชทได้เร็ว ๆ นี้ 💬")),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          icon: const Icon(Icons.star_border_rounded, size: 20),
-                          label: const Text("รีวิว"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: kPrimary,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            elevation: 0,
-                          ),
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("เปิดรีวิวได้เร็ว ๆ นี้ ⭐")),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
+                  
+                  
+                  // ✅ ปุ่มเปลี่ยนสถานะดีล
+            if ((status == 'accepted' || status == 'in_progress') && data['isOwner'] == true) ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFFFFB84C), // ส้ม
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                   ),
+                  onPressed: () async {
+                    final firestore = FirebaseFirestore.instance;
+                    final confirmId = data['confirmId'];
+                    final postId = data['postId'];
+                    final chatId = data['chatId'];
+                    final requesterId = data['requesterId'];
+                    final ownerId = data['ownerId'];
+                    final postTitle = data['postTitle'] ?? "สิ่งของ";
 
-                  // 🩷 ข้อความขอบคุณตอนเสร็จสิ้น
-                  if (status == 'completed') ...[
-                    const SizedBox(height: 28),
-                    Center(
-                      child: Column(
-                        children: const [
-                          Icon(Icons.favorite, color: kPrimary, size: 40),
-                          SizedBox(height: 8),
-                          Text(
-                            "ขอบคุณที่ร่วมแบ่งปันสิ่งดี ๆ 💗",
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: kText,
-                            ),
+                    final qtyController = TextEditingController();
+
+                    // 🎁 popup ให้กรอกจำนวนที่ส่ง
+                    await showDialog(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: const Text("จำนวนของที่จัดส่ง"),
+                        content: TextField(
+                          controller: qtyController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            hintText: "เช่น 100",
                           ),
-                          SizedBox(height: 4),
-                          Text(
-                            "คุณคือหนึ่งในแรงบันดาลใจของชุมชนปันใจ 🌷",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey,
-                            ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text("ยกเลิก"),
+                          ),
+                          ElevatedButton(
+                            onPressed: () async {
+                              final sentQty = int.tryParse(qtyController.text) ?? 0;
+                              if (sentQty <= 0) return;
+
+                              // ✅ 1. อัปเดตสถานะใน confirmations
+                              await firestore.collection('confirmations').doc(confirmId).update({
+                                'status': 'shipping',
+                                'itemSent': sentQty,
+                                'updatedAt': FieldValue.serverTimestamp(),
+                              });
+
+                              // ✅ 2. ลบจำนวนใน posts
+                              await firestore.collection('posts').doc(postId).update({
+                                'quantity': FieldValue.increment(-sentQty),
+                              });
+
+                              // ✅ 3. ส่งข้อความไปในแชท (ให้ผู้รับรู้)
+                              await firestore
+                                  .collection('chats')
+                                  .doc(chatId)
+                                  .collection('messages')
+                                  .add({
+                                'type': 'system',
+                                'text': '📦 ผู้บริจาคได้จัดส่ง "$postTitle" จำนวน $sentQty ชิ้นแล้ว!',
+                                'createdAt': FieldValue.serverTimestamp(),
+                              });
+
+                              // ✅ 4. สร้างการแจ้งเตือนให้ผู้รับ
+                              await firestore.collection('notifications').add({
+                                'toUserId': requesterId,
+                                'fromUserId': ownerId,
+                                'postId': postId,
+                                'type': 'shipping_started',
+                                'message': 'ผู้บริจาคได้จัดส่ง "$postTitle" จำนวน $sentQty ชิ้นแล้ว 💛',
+                                'isRead': false,
+                                'createdAt': FieldValue.serverTimestamp(),
+                              });
+
+                              Navigator.pop(context);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('📦 บันทึกการจัดส่งเรียบร้อย!')),
+                              );
+                            },
+                            child: const Text("ยืนยัน"),
                           ),
                         ],
                       ),
-                    ),
-                  ],
-                ],
+                    );
+                  },
+                  child: const Text("จัดส่งพัสดุแล้ว 📦"),
+                ),
               ),
-            ),
+              const SizedBox(width: 12),
+            ],
+
+            if ((status == 'accepted' || status == 'in_progress') && data['isOwner'] == true) ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFFFFB84C),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  ),
+                  onPressed: () async {
+                    final firestore = FirebaseFirestore.instance;
+                    final confirmId = data['confirmId'];
+                    final ownerId = data['ownerId'];
+                    final requesterId = data['requesterId'];
+                    final itemSent = data['itemSent'] ?? 0;
+
+                    // ✅ 1. เปลี่ยนสถานะเป็น completed
+                    await firestore.collection('confirmations').doc(confirmId).update({
+                      'status': 'completed',
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+
+                    // ✅ 2. เพิ่มคะแนนให้ผู้บริจาค
+                    if (itemSent > 0) {
+                      await firestore.collection('users').doc(ownerId).update({
+                        'points': FieldValue.increment(itemSent),
+                      });
+
+                      // ✅ 3. แจ้งเตือนว่าผู้บริจาคได้รับคะแนนแล้ว
+                      await firestore.collection('notifications').add({
+                        'toUserId': ownerId,
+                        'fromUserId': requesterId,
+                        'type': 'points_awarded',
+                        'message': 'ได้รับ +$itemSent คะแนนจากการบริจาค 💗',
+                        'isRead': false,
+                        'createdAt': FieldValue.serverTimestamp(),
+                      });
+                    }
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('✅ ยืนยันรับพัสดุเรียบร้อย!')),
+                    );
+                  },
+                  child: const Text("ยืนยันรับพัสดุ ✅"),
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+                            ],
+                          ),
+                        ),
+                        // ✅ ปุ่มสำหรับประเภท "แลกเปลี่ยน (swap)"
+            if (type == 'swap' && status == 'accepted') ...[
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFFFFB84C), // ส้ม
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  ),
+                  onPressed: () async {
+                    final firestore = FirebaseFirestore.instance;
+                    final confirmId = data['confirmId'];
+                    final currentUserId = data['currentUserId']; // ผู้ใช้ปัจจุบัน
+                    final ownerId = data['ownerId'];
+                    final requesterId = data['requesterId'];
+
+                    // ถ้าเราคือ owner → ownerConfirm = true
+                    // ถ้าเราคือ requester → requesterConfirm = true
+                    final updateField = currentUserId == ownerId
+                        ? 'ownerConfirm'
+                        : 'requesterConfirm';
+
+                    await firestore.collection('confirmations').doc(confirmId).update({
+                      updateField: true,
+                      'status': 'shipping',
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('📦 บันทึกการจัดส่งเรียบร้อย!')),
+                    );
+                  },
+                  child: const Text("จัดส่งพัสดุแล้ว 📦"),
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+
+            // ✅ ปุ่มสำหรับผู้รับ (Requester) เมื่อสถานะเป็น shipping
+            if (status == 'shipping' && data['isRequester'] == true) ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFF92D56F), // เขียว
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  ),
+                  onPressed: () async {
+                    final firestore = FirebaseFirestore.instance;
+                    final confirmId = data['confirmId'];
+                    final ownerId = data['ownerId'];
+                    final requesterId = data['requesterId'];
+                    final itemSent = data['itemSent'] ?? 0;
+
+                    // ✅ 1. เปลี่ยนสถานะเป็น completed
+                    await firestore.collection('confirmations').doc(confirmId).update({
+                      'status': 'completed',
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+
+                    // ✅ 2. เพิ่มคะแนนให้ผู้บริจาค
+                    if (itemSent > 0) {
+                      await firestore.collection('users').doc(ownerId).update({
+                        'points': FieldValue.increment(itemSent),
+                      });
+
+                      // ✅ 3. แจ้งเตือนว่าผู้บริจาคได้รับคะแนนแล้ว
+                      await firestore.collection('notifications').add({
+                        'toUserId': ownerId,
+                        'fromUserId': requesterId,
+                        'type': 'points_awarded',
+                        'message': 'ได้รับ +$itemSent คะแนนจากการบริจาค 💗',
+                        'isRead': false,
+                        'createdAt': FieldValue.serverTimestamp(),
+                      });
+                    }
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('✅ ยืนยันรับพัสดุเรียบร้อย!')),
+                    );
+                  },
+                  child: const Text("ยืนยันรับพัสดุ ✅"),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+
+            if (type == 'swap' && status == 'shipping') ...[
+              Expanded(
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Color(0xFF92D56F), // เขียว
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  ),
+                  onPressed: () async {
+                    final firestore = FirebaseFirestore.instance;
+                    final confirmId = data['confirmId'];
+                    final currentUserId = data['currentUserId'];
+                    final ownerId = data['ownerId'];
+                    final requesterId = data['requesterId'];
+
+                    final snapshot =
+                        await firestore.collection('confirmations').doc(confirmId).get();
+                    final confirmData = snapshot.data() ?? {};
+
+                    final ownerConfirm = confirmData['ownerConfirm'] ?? false;
+                    final requesterConfirm = confirmData['requesterConfirm'] ?? false;
+
+                    final updateField = currentUserId == ownerId
+                        ? 'ownerConfirm'
+                        : 'requesterConfirm';
+
+                    // กดยืนยันรับพัสดุ
+                    await firestore.collection('confirmations').doc(confirmId).update({
+                      updateField: true,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+
+                    // ถ้าทั้งสองฝั่งยืนยันครบ → เปลี่ยนเป็น completed
+                    if ((updateField == 'ownerConfirm' && requesterConfirm == true) ||
+                        (updateField == 'requesterConfirm' && ownerConfirm == true)) {
+                      await firestore.collection('confirmations').doc(confirmId).update({
+                        'status': 'completed',
+                      });
+                    }
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('✅ ยืนยันรับพัสดุเรียบร้อย!')),
+                    );
+                  },
+                  child: const Text("ยืนยันรับพัสดุ ✅"),
+                ),
+              ),
+              const SizedBox(width: 12),
+            ]
           ],
         ),
       ),

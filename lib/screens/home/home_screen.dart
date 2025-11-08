@@ -154,6 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFFFFFFFF),
       appBar: _selectedIndex == 0 ? const PunjaiAppBar() : null,
 

@@ -24,116 +24,114 @@ class _NotificationDetailPageState extends State<NotificationDetailPage> {
   final TextEditingController _reasonController = TextEditingController();
   bool _isLoading = false;
 
-  // 🎀 ยอมรับดีล
-  Future<void> _acceptDeal(Map<String, dynamic> notif, String notifId) async {
+// 🎀 ยอมรับดีล
+Future<void> _acceptDeal(Map<String, dynamic> notif, String notifId) async {
   final currentUser = _auth.currentUser;
   if (currentUser == null) return;
 
-  final requesterId = notif['fromUserId'];
-  final ownerId = notif['toUserId'];
-  final postId = notif['postId'];
-  final type = notif['type'] ?? 'donate';
-  final messenger = ScaffoldMessenger.of(context);
-
   try {
+    setState(() => _isLoading = true);
+
+    final requesterId = notif['fromUserId'];
+    final postId = notif['postId'];
+
+    if (postId.isEmpty) {
+      print("⚠️ ไม่มี postId ใน notification!");
+      return;
+    }
+
+    // 🟡 ดึงข้อมูลโพสต์
+    final postDoc = await _firestore.collection('posts').doc(postId).get();
+    final postData = postDoc.data();
+    final postTitle = postData?['title'] ?? 'ไม่ระบุชื่อโพสต์';
+    final postType = postData?['type'] ?? 'unknown';
+
+    // ✅ อัปเดตสถานะ notification
     await _firestore.collection('notifications').doc(notifId).update({
       'status': 'accepted',
+      'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 🔍 ตรวจว่ามีห้องแชทนี้อยู่แล้วไหม
-    final existingChat = await _firestore
-        .collection('chats')
-        .where('participants', arrayContains: ownerId)
+    // 🩷 เช็กหรือสร้าง confirmation ก่อน
+    final confirmRef = _firestore.collection('confirmations');
+    final existingConfirm = await confirmRef
+        .where('postId', isEqualTo: postId)
+        .where('requesterId', isEqualTo: requesterId)
+        .limit(1)
         .get();
 
-    String? chatId;
-    for (final doc in existingChat.docs) {
-      final data = doc.data();
-      final participants = List<String>.from(data['participants'] ?? []);
-      if (participants.contains(requesterId) && data['postId'] == postId) {
-        chatId = doc.id;
-        break;
-      }
-    }
+    String confirmId;
 
-    // 🩵 ถ้ายังไม่มีแชทนี้ → สร้างใหม่
-    if (chatId == null) {
-      final chatDoc = await _firestore.collection('chats').add({
-        'participants': [ownerId, requesterId],
-        'postId': postId,
-        'type': type,
-        'lastMessage': '',
+    if (existingConfirm.docs.isNotEmpty) {
+      confirmId = existingConfirm.docs.first.id;
+      await confirmRef.doc(confirmId).update({
+        'status': 'in_progress',
         'updatedAt': FieldValue.serverTimestamp(),
+      });
+      print('🔄 ใช้ confirmId เดิม: $confirmId');
+    } else {
+      final newConfirm = await confirmRef.add({
+        'ownerId': currentUser.uid,
+        'requesterId': requesterId,
+        'postId': postId,
+        'status': 'in_progress',
+        'ownerConfirm': false,
+        'requesterConfirm': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
-      chatId = chatDoc.id;
+      confirmId = newConfirm.id;
+      print('🆕 สร้าง confirmId ใหม่: $confirmId');
     }
 
-    await _firestore.collection('confirmations').add({
-      'chatId': chatId,
-      'postId': postId,
-      'ownerId': ownerId,
-      'requesterId': requesterId,
-      'status': 'accepted',
-      'type': type,
-      'timestamp': FieldValue.serverTimestamp(),
-      'isReviewed': false,
-      'ownerConfirm': false,
-      'requesterConfirm': false,
+    // 💬 จากนั้นค่อยสร้างแชท พร้อมแนบ confirmId
+    final chatRef = await _firestore.collection('chats').add({
+      'participants': [currentUser.uid, requesterId],
+      'ownerId': currentUser.uid,
+      'dealPostId': postId,
+      'dealTitle': postTitle,
+      'dealType': postType,
+      'dealStatus': 'in_progress',
+      'confirmId': confirmId, // ✅ ตรงนี้แหละที่สำคัญ
+      'chatType': 'deal',
+      'lastMessage': '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  
+  
+    // 🔁 แล้วอัปเดต confirm ให้รู้ว่า chat ไหนเชื่อมอยู่
+    await confirmRef.doc(confirmId).update({
+      'chatId': chatRef.id,
+      'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    await _firestore.collection('notifications').add({
-      'toUserId': requesterId,
-      'fromUserId': ownerId,
-      'postId': postId,
-      'type': 'deal_accepted',
-      'message': 'เจ้าของโพสต์ยอมรับดีลของคุณแล้ว 💬',
-      'isRead': false,
-      'status': 'accepted',
+    // 🩷 เพิ่มข้อความระบบ
+    await chatRef.collection('messages').add({
+      'type': 'system',
+      'text': '🎯 ดีลใหม่สำหรับโพสต์: $postTitle',
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    messenger.showSnackBar(
-      const SnackBar(content: Text('✅ ยอมรับดีลและสร้างห้องแชทเรียบร้อย!')),
+    print("✅ สร้างแชทสำเร็จ confirmId=$confirmId, chatId=${chatRef.id}");
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('🎉 ยอมรับดีลและสร้างห้องแชทเรียบร้อยแล้ว!'),
+        backgroundColor: Colors.green,
+      ),
     );
 
-    // 📦 ดึงข้อมูลผู้ใช้ฝั่งตรงข้าม
-    final userDoc = await _firestore.collection('users').doc(requesterId).get();
-    final userData = userDoc.data() ?? {};
-    final requesterName =
-        '${userData['firstname'] ?? ''} ${userData['lastname'] ?? ''}'.trim();
-    final requesterImage = userData['profileImage'] ??
-        'https://cdn-icons-png.flaticon.com/512/149/149071.png';
-
-    // ✅ ไปหน้าแชททันที (เลือกฝั่งให้ถูก)
-    if (!mounted) return;
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    final currentUserId = _auth.currentUser!.uid;
-    final isOwner = currentUserId == ownerId;
-
-    Navigator.pushReplacementNamed(
-      context,
-      '/chatRoom',
-      arguments: {
-        'chatId': chatId ?? '',
-        'otherUserId': isOwner ? requesterId : ownerId,
-        'otherUserName': isOwner
-            ? (requesterName.isNotEmpty ? requesterName : 'ผู้ใช้ Punjai')
-            : (userData['firstname'] ?? '') + ' ' + (userData['lastname'] ?? ''),
-        'otherUserImage': isOwner
-            ? requesterImage
-            : userData['profileImage'] ??
-                'https://cdn-icons-png.flaticon.com/512/149/149071.png',
-        'postId': postId ?? '',
-        'ownerId': ownerId ?? '',
-      },
-    );
+    setState(() => _isLoading = false);
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('เกิดข้อผิดพลาด: $e')));
+    setState(() => _isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('เกิดข้อผิดพลาด: $e'),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
   }
 }
-
 
 
   // 💔 ปฏิเสธดีล
@@ -162,7 +160,9 @@ class _NotificationDetailPageState extends State<NotificationDetailPage> {
         'fromUserId': currentUser.uid,
         'postId': notif['postId'],
         'type': 'deal_rejected',
+        'status': 'rejected',
         'message': 'เจ้าของโพสต์ปฏิเสธคำขอ 😢 เหตุผล: $reason',
+        
         'isRead': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -211,8 +211,11 @@ Widget build(BuildContext context) {
         final fromUser = notifData['fromUserId'];
         final toUser = notifData['toUserId'];
         final postId = notifData['postId'];
-        final isOwner = currentUser?.uid == toUser;
-        final isRequester = currentUser?.uid == fromUser;
+        final notifType = notifData['type'] ?? '';
+
+        final isOwner = currentUser?.uid == toUser && notifType != 'deal_rejected';
+        final isRequester = currentUser?.uid == fromUser || notifType == 'deal_rejected';
+
 
         return FutureBuilder<DocumentSnapshot>(
           future: _firestore.collection('posts').doc(postId).get(),
@@ -377,19 +380,25 @@ Widget build(BuildContext context) {
                   if (isRequester) ...[
                     if (status == 'accepted')
                       _goToChatButton(notifData)
-                    else if (status == 'rejected')
-                      _rejectMessageBox(notifData)
+                    else if (status == 'rejected') ...[
+                      const SizedBox(height: 20),
+                      Text(
+                        '❌ คุณถูกปฏิเสธคำขอนี้แล้ว',
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ]
                     else
                       const Text(
                         '⌛ เจ้าของโพสต์ยังไม่ตอบรับคำขอของคุณ',
                         style: TextStyle(color: Colors.grey),
                       ),
-                      
                   ],
-                  
                 ],
-
-                
               ),
             );
           },
@@ -459,6 +468,7 @@ Future<void> _goToChat(Map<String, dynamic> notifData) async {
       .collection('confirmations')
       .where('postId', isEqualTo: notifData['postId'])
       .where('status', isEqualTo: 'accepted')
+      .where('requesterId', isEqualTo: notifData['fromUserId'])
       .limit(1)
       .get();
 
@@ -539,10 +549,24 @@ Widget _goToChatButton(Map<String, dynamic> notifData) {
     width: double.infinity,
     child: ElevatedButton.icon(
       onPressed: () async {
+        final currentUserId = _auth.currentUser!.uid;
+
+        // 🔍 ค้นหาดีลที่ตรงกับโพสต์นี้ + มีสถานะ accepted หรือ in_progress
         final confirmSnap = await _firestore
             .collection('confirmations')
             .where('postId', isEqualTo: notifData['postId'])
-            .where('status', isEqualTo: 'accepted')
+            .where(
+              Filter.or(
+                Filter('status', isEqualTo: 'accepted'),
+                Filter('status', isEqualTo: 'in_progress'),
+              ),
+            )
+            .where(
+              Filter.or(
+                Filter('ownerId', isEqualTo: currentUserId),
+                Filter('requesterId', isEqualTo: currentUserId),
+              ),
+            )
             .limit(1)
             .get();
 
@@ -551,10 +575,11 @@ Widget _goToChatButton(Map<String, dynamic> notifData) {
           final chatId = confirmData['chatId'];
           final ownerId = confirmData['ownerId'];
           final requesterId = confirmData['requesterId'];
-          final currentUserId = _auth.currentUser!.uid;
+
           final isOwner = currentUserId == ownerId;
           final otherUserId = isOwner ? requesterId : ownerId;
 
+          // 📚 ดึงข้อมูลผู้ใช้ฝั่งตรงข้าม
           final userDoc =
               await _firestore.collection('users').doc(otherUserId).get();
           final userData = userDoc.data() ?? {};
@@ -563,6 +588,7 @@ Widget _goToChatButton(Map<String, dynamic> notifData) {
           final otherImage = userData['profileImage'] ??
               'https://cdn-icons-png.flaticon.com/512/149/149071.png';
 
+          // 🪄 ไปหน้าแชท
           if (!context.mounted) return;
           Navigator.pushReplacementNamed(
             context,
@@ -573,7 +599,7 @@ Widget _goToChatButton(Map<String, dynamic> notifData) {
               'otherUserName':
                   otherName.isNotEmpty ? otherName : 'ผู้ใช้ Punjai',
               'otherUserImage': otherImage,
-              'postId': notifData['postId'],
+              'postId': confirmData['postId'],
               'ownerId': ownerId,
             },
           );

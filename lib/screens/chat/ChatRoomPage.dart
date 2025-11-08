@@ -1,10 +1,12 @@
 import 'dart:io';
-import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
+import 'package:video_player/video_player.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:punjai_app/screens/profile/profile_screen.dart';
+import 'package:flutter/material.dart';
 
 class ChatRoomPage extends StatefulWidget {
   final String chatId;
@@ -30,52 +32,360 @@ class ChatRoomPage extends StatefulWidget {
   State<ChatRoomPage> createState() => _ChatRoomPageState();
 }
 
-class _ChatRoomPageState extends State<ChatRoomPage>
-    with SingleTickerProviderStateMixin {
+class _ChatRoomPageState extends State<ChatRoomPage> {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
-  final TextEditingController _msgController = TextEditingController();
-  final ImagePicker _picker = ImagePicker();
+  final _picker = ImagePicker();
+  final _storage = FirebaseStorage.instance;
+  final _msgCtrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
 
-  bool get isDonor => _auth.currentUser?.uid == widget.ownerId;
+  Map<String, dynamic>? chatData;
 
   @override
-  void dispose() {
-    _msgController.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _loadChatData();
   }
 
-  // =============================
-  // 🩷 ฟังก์ชันส่งข้อความทั่วไป
-  // =============================
-  Future<void> _sendMessage(String text) async {
-    if (text.trim().isEmpty) return;
+  Future<void> _loadChatData() async {
+    final doc = await _firestore.collection('chats').doc(widget.chatId).get();
+    if (doc.exists) {
+      setState(() {
+        chatData = doc.data();
+      });
+    }
+  }
+
+  // 🎨 พาสเทลตามประเภทโพสต์
+  Color get pastelColor {
+    final type = chatData?['dealType'] ?? '';
+    if (type == 'donate') return const Color(0xFFFFF0B3);
+    if (type == 'request') return const Color(0xFFFFC2D6);
+    if (type == 'swap') return const Color(0xFFBDE6FF);
+    return const Color(0xFFEDE7FF); 
+  }
+
+  // 🩷 แปลงชื่อประเภทโพสต์เป็นภาษาไทย
+  String get displayType {
+    switch (chatData?['dealType']) {
+      case 'donate':
+        return 'บริจาค';
+      case 'request':
+        return 'ขอรับ';
+      case 'swap':
+        return 'แลกเปลี่ยน';
+      default:
+        return 'แชททั่วไป';
+    }
+  }
+
+  // 🩵 แสดงชื่อโพสต์ ถ้าไม่มีให้ fallback
+  String get title =>
+      chatData?['dealTitle']?.toString().isNotEmpty == true
+          ? chatData!['dealTitle']
+          : 'ไม่ระบุชื่อโพสต์';
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = _auth.currentUser;
+    final chatId = widget.chatId;
+
+    return Scaffold(
+      resizeToAvoidBottomInset: true,
+      backgroundColor: const Color(0xFFFFF7FB),
+
+      // 🌈 AppBar พาสเทลน่ารัก พร้อมชื่อโพสต์
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(70),
+        child: AppBar(
+          elevation: 2,
+          backgroundColor: pastelColor,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(25)),
+          ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.otherUserName,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                "$displayType: ",
+                style: const TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+            ],
+          ),
+          centerTitle: false,
+        ),
+      ),
+
+      // 💬 แสดงข้อความทั้งหมด
+      body: SafeArea(
+  child: Column(
+    children: [
+      // 💬 รายการข้อความ
+      Expanded(
+        child: StreamBuilder<QuerySnapshot>(
+          stream: _firestore
+              .collection('chats')
+              .doc(widget.chatId)
+              .collection('messages')
+              .orderBy('createdAt', descending: false)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+              return const Center(child: Text('เริ่มต้นการสนทนาได้เลย 💬'));
+            }
+
+            final messages = snapshot.data!.docs;
+            return ListView.builder(
+              controller: _scrollCtrl,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              itemCount: messages.length,
+              itemBuilder: (context, index) {
+                final msg =
+                    messages[index].data() as Map<String, dynamic>;
+                final isMe = msg['senderId'] == _auth.currentUser?.uid;
+
+                // (ไม่ต้องแก้ส่วนนี้)
+                if (msg['type'] == 'system') {
+                  return Center(
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: pastelColor.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(msg['text'] ?? '',
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.black87)),
+                    ),
+                  );
+                }
+
+                // ... image, video, text ตามเดิม
+                // (ไม่ต้องเปลี่ยน)
+                // ...
+                return Align(
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment:
+                        isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    children: [
+                      // 💖 รูปโปรไฟล์ของ "คู่สนทนา"
+                      if (!isMe)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8, top: 4),
+                          child: CircleAvatar(
+                            radius: 18,
+                            backgroundImage: NetworkImage(widget.otherUserImage),
+                          ),
+                        ),
+
+                      // 💬 กล่องข้อความ
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment:
+                              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              margin: const EdgeInsets.symmetric(vertical: 3),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: isMe
+                                    ? pastelColor.withOpacity(0.9)
+                                    : Colors.white,
+                                borderRadius: BorderRadius.only(
+                                  topLeft: const Radius.circular(14),
+                                  topRight: const Radius.circular(14),
+                                  bottomLeft: Radius.circular(isMe ? 14 : 0),
+                                  bottomRight: Radius.circular(isMe ? 0 : 14),
+                                ),
+                              ),
+                              child: _buildMessageContent(msg),
+                            ),
+
+                            // 🕒 เวลา
+                            if (msg['createdAt'] != null)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                    top: 2, left: 6, right: 6),
+                                child: Text(
+                                  DateFormat('HH:mm')
+                                      .format(msg['createdAt'].toDate()),
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.black45,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      // 🔸 ช่องว่างให้ bubble ฝั่งเราดูบาลานซ์
+                      if (isMe) const SizedBox(width: 8),
+                    ],
+                  ),
+                );
+
+
+              },
+            );
+          },
+        ),
+      ),
+
+      // 💗 ช่องพิมพ์ข้อความ
+      SafeArea(
+        child: _buildMessageInput(),
+      ),
+    ],
+  ),
+),
+    );
+  }
+
+  Widget _buildMessageContent(Map<String, dynamic> msg) {
+  final type = msg['type'] ?? 'text';
+
+  switch (type) {
+    case 'image':
+      return GestureDetector(
+        onTap: () {
+          showDialog(
+            context: context,
+            builder: (_) => Dialog(
+              backgroundColor: Colors.black.withOpacity(0.8),
+              insetPadding: const EdgeInsets.all(10),
+              child: InteractiveViewer(
+                child: Image.network(
+                  msg['url'],
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) =>
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Text('⚠️ โหลดรูปไม่สำเร็จ',
+                            style: TextStyle(color: Colors.white)),
+                      ),
+                ),
+              ),
+            ),
+          );
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Image.network(
+            msg['url'],
+            width: 200,
+            height: 200,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) =>
+                const Text('⚠️ โหลดรูปไม่สำเร็จ'),
+          ),
+        ),
+      );
+
+    case 'video':
+      return SizedBox(
+        width: 220,
+        height: 220,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: VideoPlayerWidget(url: msg['url']),
+        ),
+      );
+
+    default:
+      return Text(
+        msg['text'] ?? '',
+        style: const TextStyle(fontSize: 15, color: Colors.black87),
+      );
+  }
+}
+
+
+  Widget _buildMessageInput() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      color: Colors.white,
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.photo, color: Colors.pinkAccent),
+            onPressed: _sendImage,
+          ),
+          IconButton(
+            icon: const Icon(Icons.videocam, color: Colors.blueAccent),
+            onPressed: _sendVideo,
+          ),
+          Expanded(
+            child: TextField(
+              controller: _msgCtrl,
+              decoration: const InputDecoration(
+                hintText: "พิมพ์ข้อความ...",
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.send, color: Colors.pinkAccent),
+            onPressed: _sendMessage,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🚀 ส่งข้อความ
+  Future<void> _sendMessage() async {
+    final currentUser = _auth.currentUser;
+    if (currentUser == null || _msgCtrl.text.trim().isEmpty) return;
+
+    final text = _msgCtrl.text.trim();
+    _msgCtrl.clear();
 
     await _firestore
         .collection('chats')
         .doc(widget.chatId)
         .collection('messages')
         .add({
-      'senderId': _auth.currentUser!.uid,
-      'text': text.trim(),
-      'type': 'text',
+      'senderId': currentUser.uid,
+      'text': text,
+      'type': 'user',
       'createdAt': FieldValue.serverTimestamp(),
     });
 
+    // อัปเดต lastMessage
     await _firestore.collection('chats').doc(widget.chatId).update({
       'lastMessage': text,
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    _msgController.clear();
+    _scrollCtrl.animateTo(
+      _scrollCtrl.position.maxScrollExtent + 80,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
-  // =============================
-  // 🩵 ฟังก์ชันส่งรูปภาพในแชท
-  // =============================
+  // 🖼 ส่งรูปภาพ
   Future<void> _sendImage() async {
-    final picked =
-        await _picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    final picked = await _picker.pickImage(source: ImageSource.gallery);
     if (picked == null) return;
 
     final ref = FirebaseStorage.instance
@@ -83,690 +393,87 @@ class _ChatRoomPageState extends State<ChatRoomPage>
     await ref.putFile(File(picked.path));
     final url = await ref.getDownloadURL();
 
-    await _firestore
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('messages')
-        .add({
+    await _firestore.collection('chats').doc(widget.chatId).collection('messages').add({
       'senderId': _auth.currentUser!.uid,
       'type': 'image',
-      'mediaUrl': url,
+      'url': url,
       'createdAt': FieldValue.serverTimestamp(),
     });
   }
 
-  // ===================================================
-  // 📦 ผู้บริจาคกดยืนยันการจัดส่ง (กรอกชื่อ / จำนวน / รูป)
-  // ===================================================
-  Future<void> _confirmDelivery(BuildContext context) async {
-    final TextEditingController nameCtrl = TextEditingController();
-    final TextEditingController qtyCtrl = TextEditingController();
-    File? imageFile;
-    final picker = ImagePicker();
+  // 🎥 ส่งวิดีโอ
+  Future<void> _sendVideo() async {
+    final picked = await _picker.pickVideo(source: ImageSource.gallery);
+    if (picked == null) return;
 
-    await showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            Future<void> _pickImage() async {
-              final picked = await picker.pickImage(source: ImageSource.gallery);
-              if (picked != null) {
-                imageFile = File(picked.path);
-                setState(() {});
-              }
-            }
+    final ref = FirebaseStorage.instance
+        .ref('chat_media/${widget.chatId}/${DateTime.now().millisecondsSinceEpoch}.mp4');
+    await ref.putFile(File(picked.path));
+    final url = await ref.getDownloadURL();
 
-            return AlertDialog(
-              title: const Text('📦 ยืนยันการจัดส่งสินค้า'),
-              backgroundColor: const Color(0xFFFFF7FB),
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              content: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    TextField(
-                      controller: nameCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'ชื่อสิ่งของ',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: qtyCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'จำนวนสิ่งของที่จัดส่ง',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        height: 120,
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.pinkAccent),
-                          image: imageFile != null
-                              ? DecorationImage(
-                                  image: FileImage(imageFile!),
-                                  fit: BoxFit.cover,
-                                )
-                              : null,
-                        ),
-                        child: imageFile == null
-                            ? const Center(
-                                child: Text('เลือกรูปหลักฐานการจัดส่ง 📸'),
-                              )
-                            : null,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("ยกเลิก"),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF8FB1),
-                  ),
-                  onPressed: () async {
-                    if (nameCtrl.text.isEmpty ||
-                        qtyCtrl.text.isEmpty ||
-                        imageFile == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('กรุณากรอกข้อมูลให้ครบ 💗')),
-                      );
-                      return;
-                    }
-
-                    Navigator.pop(context);
-
-                    // ✅ อัปโหลดรูปหลักฐาน
-                    final ref = FirebaseStorage.instance
-                        .ref('shipping_images')
-                        .child('${DateTime.now().millisecondsSinceEpoch}.jpg');
-                    await ref.putFile(imageFile!);
-                    final imageUrl = await ref.getDownloadURL();
-
-                    final quantity = int.tryParse(qtyCtrl.text.trim()) ?? 0;
-                    final userId = _auth.currentUser!.uid;
-
-                    // ✅ อัปเดต Firestore
-                    await _firestore.collection('confirmations').add({
-                      'chatId': widget.chatId,
-                      'postId': widget.postId,
-                      'ownerId': widget.ownerId,
-                      'requesterId': widget.otherUserId,
-                      'status': 'shipping',
-                      'shippingItems': [
-                        {
-                          'name': nameCtrl.text.trim(),
-                          'quantity': quantity,
-                        }
-                      ],
-                      'shippingImageUrl': imageUrl,
-                      'ownerConfirm': true,
-                      'requesterConfirm': false,
-                      'timestamp': FieldValue.serverTimestamp(),
-                    });
-
-                    // ✅ อัปเดต stock
-                    final postRef = _firestore.collection('posts').doc(widget.postId);
-                    await _firestore.runTransaction((tx) async {
-                      final postSnap = await tx.get(postRef);
-                      if (postSnap.exists) {
-                        final oldQty = postSnap['quantity'] ?? 0;
-                        final newQty = (oldQty - quantity).clamp(0, oldQty);
-                        tx.update(postRef, {'quantity': newQty});
-                      }
-                    });
-
-                    // ✅ แจ้งเตือนผู้รับ
-                    await _firestore.collection('notifications').add({
-                      'toUserId': widget.otherUserId,
-                      'fromUserId': userId,
-                      'postId': widget.postId,
-                      'type': 'shipping_started',
-                      'message': 'ผู้บริจาคได้จัดส่งของให้คุณแล้ว 💛',
-                      'isRead': false,
-                      'createdAt': FieldValue.serverTimestamp(),
-                    });
-
-                    // ✅ เพิ่มการ์ดสถานะในแชท
-                    await _firestore
-                        .collection('chats')
-                        .doc(widget.chatId)
-                        .collection('messages')
-                        .add({
-                      'type': 'delivery_card',
-                      'senderId': userId,
-                      'itemName': nameCtrl.text.trim(),
-                      'quantity': quantity,
-                      'imageUrl': imageUrl,
-                      'status': 'shipping',
-                      'createdAt': FieldValue.serverTimestamp(),
-                    });
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('ส่งของเรียบร้อย 💗 รอผู้รับยืนยัน')),
-                    );
-                  },
-                  child: const Text("ยืนยันจัดส่ง"),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-  // ===================================================
-  // 🎁 ผู้รับกดยืนยันว่า "ได้รับสินค้าแล้ว"
-  // ===================================================
-  Future<void> _confirmReceived(BuildContext context) async {
-    final userId = _auth.currentUser!.uid;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("🎁 ยืนยันการได้รับสินค้า"),
-        content: const Text("คุณได้รับสินค้าครบถ้วนแล้วใช่ไหม?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("ยกเลิก"),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF91C7F2),
-            ),
-            child: const Text("ยืนยัน"),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    // ✅ อัปเดตสถานะ
-    final query = await _firestore
-        .collection('confirmations')
-        .where('chatId', isEqualTo: widget.chatId)
-        .where('status', isEqualTo: 'shipping')
-        .get();
-
-    if (query.docs.isNotEmpty) {
-      final docId = query.docs.first.id;
-      final data = query.docs.first.data();
-      final quantity = (data['shippingItems']?[0]['quantity'] ?? 1) as int;
-
-      await _firestore.collection('confirmations').doc(docId).update({
-        'status': 'completed',
-        'requesterConfirm': true,
-        'completedAt': FieldValue.serverTimestamp(),
-      });
-
-      // ✅ เพิ่มแต้มให้ผู้บริจาค
-      await _updateDonationPointsIfCompleted();
-
-      // ✅ แจ้งเตือนเจ้าของโพสต์
-      await _firestore.collection('notifications').add({
-        'toUserId': widget.ownerId,
-        'fromUserId': userId,
-        'postId': widget.postId,
-        'type': 'deal_completed',
-        'message': 'ผู้รับยืนยันการได้รับของแล้ว 🎉',
-        'isRead': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // ✅ เพิ่มข้อความในห้องแชท
-      await _firestore
-          .collection('chats')
-          .doc(widget.chatId)
-          .collection('messages')
-          .add({
-        'type': 'system',
-        'text': '🎁 ผู้รับยืนยันการได้รับสินค้าเรียบร้อยแล้ว',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-
-      // ✅ เปิด popup รีวิวผู้บริจาค
-      _showReviewDialog(context, widget.ownerId);
-    }
-  }
-
-  // ===================================================
-  // ⭐️ Popup รีวิวให้คะแนนผู้บริจาค
-  // ===================================================
-  Future<void> _showReviewDialog(BuildContext context, String donorId) async {
-  double rating = 5;
-  final TextEditingController commentCtrl = TextEditingController();
-
-  await showDialog(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: const Text("ให้คะแนนผู้บริจาค"),
-        backgroundColor: const Color(0xFFFFF7FB),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        content: StatefulBuilder(
-          builder: (context, setState) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text("ช่วยให้คะแนนและเขียนความคิดเห็นของคุณ 💖"),
-                const SizedBox(height: 12),
-
-                // ⭐ Rating stars
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(5, (index) {
-                    return IconButton(
-                      icon: Icon(
-                        Icons.star,
-                        color: index < rating ? Colors.amber : Colors.grey[300],
-                      ),
-                      onPressed: () => setState(() => rating = index + 1.0),
-                    );
-                  }),
-                ),
-
-                // 💬 Comment box
-                TextField(
-                  controller: commentCtrl,
-                  maxLines: 3,
-                  decoration: InputDecoration(
-                    hintText: 'เขียนความคิดเห็นของคุณ...',
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("ข้าม"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              await _firestore.collection('reviews').add({
-                'donorId': donorId,
-                'reviewerId': _auth.currentUser!.uid,
-                'rating': rating,
-                'comment': commentCtrl.text.trim(),
-                'createdAt': FieldValue.serverTimestamp(),
-              });
-
-              // ✅ คำนวณค่าเฉลี่ยใหม่
-              final reviews = await _firestore
-                  .collection('reviews')
-                  .where('donorId', isEqualTo: donorId)
-                  .get();
-
-              double avg = reviews.docs
-                      .map((d) => (d['rating'] ?? 0).toDouble())
-                      .fold(0.0, (a, b) => a + b) /
-                  reviews.docs.length;
-
-              await _firestore.collection('users').doc(donorId).update({
-                'rating': double.parse(avg.toStringAsFixed(1)),
-                'ratingCount': reviews.docs.length,
-              });
-
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('💖 ขอบคุณสำหรับการรีวิว!')),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF8FB1),
-            ),
-            child: const Text("ส่งรีวิว"),
-          ),
-        ],
-      );
-    },
-  );
-}
-
-
-// ===================================================
-// 🏆 ฟังก์ชันอัปเดตแต้มผู้บริจาค (เรียกหลังจากมีการยืนยันครบทั้งคู่)
-// ===================================================
-Future<void> _updateDonationPointsIfCompleted() async {
-  try {
-    final query = await _firestore
-        .collection('confirmations')
-        .where('chatId', isEqualTo: widget.chatId)
-        .get();
-
-    if (query.docs.isEmpty) return;
-    final doc = query.docs.first;
-    final data = doc.data();
-
-    final ownerConfirm = data['ownerConfirm'] ?? false;
-    final requesterConfirm = data['requesterConfirm'] ?? false;
-    final ownerId = data['ownerId'];
-    final postType = data['type'] ?? 'donate';
-    final shippingItems = (data['shippingItems'] ?? []) as List<dynamic>;
-    final itemCount = (shippingItems.isNotEmpty
-        ? shippingItems[0]['quantity'] ?? 1
-        : 1) as int;
-
-    // ✅ ถ้าทั้งคู่กดยืนยันแล้ว + เป็นโพสต์บริจาคหรือขอรับ
-    if (ownerConfirm && requesterConfirm &&
-        (postType == 'donate' || postType == 'request')) {
-      final userRef = _firestore.collection('users').doc(ownerId);
-      await _firestore.runTransaction((txn) async {
-        final snapshot = await txn.get(userRef);
-        if (!snapshot.exists) return;
-        final currentPoints = 
-        ((snapshot.data()?['points'] ?? 0) as num).toInt();
-        txn.update(userRef, {'points': currentPoints + itemCount});
-      });
-
-      // ✅ เพิ่มข้อความ system ในแชท
-      await _firestore
-          .collection('chats')
-          .doc(widget.chatId)
-          .collection('messages')
-          .add({
-        'type': 'system',
-        'text': '🏆 ระบบได้เพิ่มแต้มให้ผู้บริจาค +$itemCount คะแนน',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      // ✅ แจ้งเตือนผู้บริจาค
-      await _firestore.collection('notifications').add({
-        'toUserId': ownerId,
-        'fromUserId': _auth.currentUser!.uid,
-        'postId': widget.postId,
-        'type': 'point_awarded',
-        'message': 'คุณได้รับ +$itemCount แต้มจากการบริจาคครั้งล่าสุด 🎉',
-        'isRead': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      print('✅ Added $itemCount points to donor $ownerId');
-    }
-  } catch (e) {
-    print('❌ Error updating donation points: $e');
+    await _firestore.collection('chats').doc(widget.chatId).collection('messages').add({
+      'senderId': _auth.currentUser!.uid,
+      'type': 'video',
+      'url': url,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
   }
 }
 
+// 🎬 วิดีโอพรีวิว widget
+class VideoPlayerWidget extends StatefulWidget {
+  final String url;
+  const VideoPlayerWidget({super.key, required this.url});
 
-  // ===================================================
-  // 📋 แสดงข้อความและการ์ดสถานะในแชท
-  // ===================================================
-  Widget _buildMessage(Map<String, dynamic> data) {
-    final type = data['type'];
-    final isMe = data['senderId'] == _auth.currentUser?.uid;
+  @override
+  State<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+}
 
-    if (type == 'delivery_card') {
-      return Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: _buildDeliveryCard(data),
-      );
-    }
+class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
+  late VideoPlayerController _controller;
 
-    if (type == 'image') {
-      return Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.network(data['mediaUrl'], width: 180),
-        ),
-      );
-    }
-
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color:
-              isMe ? const Color(0xFFFFE0EE) : const Color(0xFFE3F2FD),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(data['text'] ?? ''),
-      ),
-    );
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
+      ..initialize().then((_) {
+        setState(() {});
+      });
   }
 
-  // ===================================================
-  // 🧾 การ์ดสถานะการจัดส่ง
-  // ===================================================
-  Widget _buildDeliveryCard(Map<String, dynamic> data) {
-    final itemName = data['itemName'] ?? 'ไม่ระบุ';
-    final qty = data['quantity'] ?? 0;
-    final imageUrl = data['imageUrl'] ?? '';
-    final status = data['status'] ?? 'shipping';
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: const [
-              Icon(Icons.local_shipping_outlined,
-                  color: Color(0xFFFF8FB1), size: 22),
-              SizedBox(width: 6),
-              Text("ผู้บริจาคได้จัดส่งของแล้ว",
-                  style:
-                      TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (imageUrl.isNotEmpty)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child:
-                  Image.network(imageUrl, height: 180, width: double.infinity, fit: BoxFit.cover),
-            ),
-          const SizedBox(height: 10),
-          Text('สิ่งของ: $itemName',
-              style: const TextStyle(
-                  fontWeight: FontWeight.w500, color: Colors.black87)),
-          Text('จำนวน: $qty ชิ้น',
-              style: const TextStyle(color: Colors.black54)),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(Icons.airport_shuttle_outlined,
-                  color: Colors.orange, size: 18),
-              const SizedBox(width: 5),
-              Text(
-                status == 'shipping'
-                    ? 'สถานะ: กำลังจัดส่งสินค้า'
-                    : 'สถานะ: รอผู้รับยืนยัน',
-                style: const TextStyle(color: Colors.black87),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
-  // ===================================================
-  // 🧩 ส่วน build หลักของหน้าแชท
-  // ===================================================
   @override
   Widget build(BuildContext context) {
-    final chatRef = _firestore
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('messages')
-        .orderBy('createdAt', descending: true);
-
-                return Scaffold(
-              backgroundColor: const Color(0xFFFFF7FB),
-              appBar: AppBar(
-                backgroundColor: Colors.white,
-                elevation: 1,
-                title: GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ProfileScreen(uid: widget.otherUserId),
-                      ),
-                    );
-                  },
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 20,
-                        backgroundImage: NetworkImage(widget.otherUserImage),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          widget.otherUserName,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.black87,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                iconTheme: const IconThemeData(color: Colors.black),
-              ),
-
-
-      body: Column(
-        children: [
-          // พื้นที่แสดงข้อความ
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: chatRef.snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final messages = snapshot.data!.docs;
-                return ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.all(16),
-                  itemCount: messages.length,
-                  itemBuilder: (context, i) {
-                    final data = messages[i].data() as Map<String, dynamic>;
-                    return _buildMessage(data);
-                  },
-                );
-              },
-            ),
+    if (!_controller.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        AspectRatio(
+          aspectRatio: _controller.value.aspectRatio,
+          child: VideoPlayer(_controller),
+        ),
+        IconButton(
+          icon: Icon(
+            _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+            color: Colors.white,
+            size: 36,
           ),
-
-          // แถบพิมพ์ + ปุ่ม action
-          // 🔹 แถบพิมพ์ข้อความและปุ่มส่ง
-Container(
-  color: Colors.white,
-  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-  child: Column(
-    children: [
-      Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.photo, color: Colors.pinkAccent),
-            onPressed: _sendImage,
-          ),
-          Expanded(
-            child: TextField(
-              controller: _msgController,
-              decoration: const InputDecoration(
-                hintText: 'พิมพ์ข้อความ...',
-                border: InputBorder.none,
-              ),
-              onSubmitted: _sendMessage,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send_rounded, color: Colors.pinkAccent),
-            onPressed: () => _sendMessage(_msgController.text),
-          ),
-        ],
-      ),
-      const SizedBox(height: 8),
-
-      // 🌸 ปุ่มจัดส่ง / รับแล้ว
-      Row(
-        children: [
-          if (isDonor)
-            Expanded(
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.local_shipping_outlined),
-                label: const Text('จัดส่งแล้ว'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF8FB1),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                onPressed: () => _confirmDelivery(context),
-              ),
-            )
-          else
-            Expanded(
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.check_circle_outline),
-                label: const Text('ได้รับแล้ว'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF91C7F2),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                onPressed: () => _confirmReceived(context),
-              ),
-            ),
-        ],
-      ),
-    ],
-  ),
-),
-        ],
-      ),
+          onPressed: () {
+            setState(() {
+              _controller.value.isPlaying
+                  ? _controller.pause()
+                  : _controller.play();
+            });
+          },
+        ),
+      ],
     );
   }
-} 
-
+}

@@ -5,6 +5,7 @@ import 'settings_page.dart';
 import '../posts/post_detail_page.dart';
 import 'package:video_player/video_player.dart';
 import 'followers_following_page.dart';
+import '../chat/ChatRoomPage.dart';
 
 // ===============================
 // 🔇 วิดีโอ preview ไม่มีเสียง เล่นวน
@@ -74,6 +75,77 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   static const Color kPrimary = Color(0xFFFF6FA5);
   static const Color kText = Color(0xFF1F2937);
+
+  Future<int?> _getTopRank(String uid) async {
+  final snapshot = await _db
+      .collection('users')
+      .orderBy('points', descending: true)
+      .limit(3)
+      .get();
+
+  for (int i = 0; i < snapshot.docs.length; i++) {
+    if (snapshot.docs[i].id == uid) return i + 1; // ลำดับ 1–3
+  }
+  return null;
+}
+
+
+  Future<void> _startChat(BuildContext context, Map<String, dynamic> otherUser) async {
+  final currentUser = _auth.currentUser;
+  if (currentUser == null) return;
+
+  final otherUserId = widget.uid;
+
+  // 🔍 ค้นหาเฉพาะแชท "ทั่วไป" ที่เคยมีอยู่ระหว่างสองคน
+  final chatQuery = await _db
+      .collection('chats')
+      .where('chatType', isEqualTo: 'normal')
+      .where('participants', arrayContains: currentUser.uid)
+      .get();
+
+  String? existingChatId;
+
+  // 🔎 เช็คว่าในแชททั่วไปมีอันไหนที่มีผู้ใช้ทั้งสองคน
+  for (final doc in chatQuery.docs) {
+    final participants = List<String>.from(doc['participants'] ?? []);
+    if (participants.contains(otherUserId)) {
+      existingChatId = doc.id;
+      break;
+    }
+  }
+
+  // 🚀 ถ้ายังไม่มีแชททั่วไป — สร้างใหม่
+  if (existingChatId == null) {
+    final chatRef = await _db.collection('chats').add({
+      'participants': [currentUser.uid, otherUserId],
+      'chatType': 'normal',
+      'lastMessage': '',
+      'lastSenderId': '',
+      'unreadCount': {currentUser.uid: 0, otherUserId: 0},
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    existingChatId = chatRef.id;
+  }
+
+  // 🎨 เปิดหน้า ChatRoom (เหมือนเดิม)
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatRoomPage(
+        chatId: existingChatId!,
+        otherUserId: otherUserId,
+        otherUserName:
+            '${otherUser['firstname'] ?? ''} ${otherUser['lastname'] ?? ''}',
+        otherUserImage:
+            otherUser['profileImage'] ?? 'https://cdn-icons-png.flaticon.com/512/149/149071.png',
+        postId: '', // ไม่มีโพสต์
+        ownerId: '',
+      ),
+    ),
+  );
+}
+
 
   @override
   void initState() {
@@ -196,11 +268,56 @@ class _ProfileScreenState extends State<ProfileScreen>
 
                 // 🔹 Profile image
                 Center(
-                  child: CircleAvatar(
-                    radius: 45,
-                    backgroundImage: NetworkImage(profileImage),
+  child: FutureBuilder<int?>(
+    future: _getTopRank(widget.uid),
+    builder: (context, rankSnap) {
+      final rank = rankSnap.data;
+      Color? borderColor;
+      if (rank == 1) borderColor = const Color(0xFFFFD700); // ทอง
+      if (rank == 2) borderColor = const Color(0xFFC0C0C0); // เงิน
+      if (rank == 3) borderColor = const Color(0xFFCD7F32); // ทองแดง
+
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          CircleAvatar(
+            radius: 50,
+            backgroundColor: borderColor ?? Colors.transparent,
+            child: CircleAvatar(
+              radius: 45,
+              backgroundImage: NetworkImage(profileImage),
+            ),
+          ),
+          if (rank != null)
+            Positioned(
+              bottom: -4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: borderColor,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  rank == 1
+                      ? "🥇 Top Donate 1"
+                      : rank == 2
+                          ? "🥈 Top Donate 2"
+                          : "🥉 Top Donoate 3",
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color.fromARGB(255, 0, 0, 0),
+                    fontSize: 10,
                   ),
                 ),
+              ),
+            ),
+        ],
+      );
+    },
+  ),
+),
+
                 const SizedBox(height: 10),
 
                 // 🔹 Name + username
@@ -269,17 +386,24 @@ class _ProfileScreenState extends State<ProfileScreen>
                 // 🔹 Follow button (for others)
                 const SizedBox(height: 18),
                 if (!isOwner)
-                  Center(
-                    child: _ActionButton(
-                      text: followersList.contains(me?.uid)
-                          ? 'Unfollow'
-                          : 'Follow',
-                      onTap: () {
-                        // TODO: toggle follow function
-                      },
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _ActionButton(
+                        text: followersList.contains(me?.uid)
+                            ? 'Unfollow'
+                            : 'Follow',
+                        onTap: () {
+                          // TODO: toggle follow function
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      _ActionButton(
+                        text: 'Chat',
+                        onTap: () => _startChat(context, data),
+                      ),
+                    ],
                   ),
-
                 // 🔹 Trust Score
                 const SizedBox(height: 24),
                 const Text(

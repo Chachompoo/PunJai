@@ -241,7 +241,65 @@ class _HistoryPageState extends State<HistoryPage>
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.chat_bubble_outline),
                   label: const Text("แชท"),
-                  onPressed: () {}, // TODO: ไปหน้าแชท
+                  onPressed: () async {
+                    final currentUserId = _auth.currentUser!.uid;
+                    final postId = data['postId']; // 🔸 เปลี่ยนให้ตรงกับตัวแปรของชมพู เช่น confirmation['postId']
+
+                    final confirmSnap = await _firestore
+                        .collection('confirmations')
+                        .where('postId', isEqualTo: postId)
+                        .where(
+                          Filter.or(
+                            Filter('status', isEqualTo: 'accepted'),
+                            Filter('status', isEqualTo: 'in_progress'),
+                          ),
+                        )
+                        .where(
+                          Filter.or(
+                            Filter('ownerId', isEqualTo: currentUserId),
+                            Filter('requesterId', isEqualTo: currentUserId),
+                          ),
+                        )
+                        .limit(1)
+                        .get();
+
+                    if (confirmSnap.docs.isNotEmpty) {
+                      final confirmData = confirmSnap.docs.first.data();
+                      final chatId = confirmData['chatId'];
+                      final ownerId = confirmData['ownerId'];
+                      final requesterId = confirmData['requesterId'];
+
+                      final isOwner = currentUserId == ownerId;
+                      final otherUserId = isOwner ? requesterId : ownerId;
+
+                      final userDoc =
+                          await _firestore.collection('users').doc(otherUserId).get();
+                      final userData = userDoc.data() ?? {};
+                      final otherName =
+                          '${userData['firstname'] ?? ''} ${userData['lastname'] ?? ''}'.trim();
+                      final otherImage = userData['profileImage'] ??
+                          'https://cdn-icons-png.flaticon.com/512/149/149071.png';
+
+                      if (!context.mounted) return;
+                      Navigator.pushNamed(
+                        context,
+                        '/chatRoom',
+                        arguments: {
+                          'chatId': chatId,
+                          'otherUserId': otherUserId,
+                          'otherUserName':
+                              otherName.isNotEmpty ? otherName : 'ผู้ใช้ Punjai',
+                          'otherUserImage': otherImage,
+                          'postId': confirmData['postId'],
+                          'ownerId': ownerId,
+                        },
+                      );
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('ไม่พบห้องแชทของดีลนี้ 😅')),
+                      );
+                    }
+                  },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFFFF8FB1),
                     side: const BorderSide(color: Color(0xFFFF8FB1)),
@@ -251,6 +309,8 @@ class _HistoryPageState extends State<HistoryPage>
                   ),
                 ),
               ),
+
+              // 🌷 ทั้งบล็อกนี้ด้านล่างมนจะไม่แตะเลย
               const SizedBox(width: 10),
               Expanded(
                 child: ElevatedButton.icon(
@@ -268,6 +328,7 @@ class _HistoryPageState extends State<HistoryPage>
               ),
             ],
           ),
+
         ],
       ),
     );
@@ -492,14 +553,48 @@ class _HistoryPageState extends State<HistoryPage>
                     };
 
                     return GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          FadeSlideRoute(
-                            page: HistoryDetailPage(data: data),
-                          ),
-                        );
-                      },
+                        onTap: () {
+                          final confirmationDoc = filteredDocs[index];
+                          final confirmData = confirmationDoc.data() as Map<String, dynamic>;
+
+                          // ข้อมูลจาก post และ user ที่โหลดใน FutureBuilder อยู่แล้ว
+                          final postData = postSnap.data!.data() as Map<String, dynamic>;
+                          final userData = userSnap.data!.data() as Map<String, dynamic>;
+
+                          // debug print ช่วยเช็กว่าข้อมูลครบไหม
+                          print("📦 ส่งข้อมูลไปหน้า detail: ${{
+                            ...confirmData,
+                            'postTitle': postData['title'],
+                            'otherUserName': userData['username'],
+                            'postImage': postData['images']?[0],
+                            'timestamp': confirmData['createdAt']?.toDate().toString(),
+                            'type': confirmData['type'],
+                          }}");
+
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => HistoryDetailPage(
+                                data: {
+                                  ...confirmData,
+                                  'confirmId': confirmationDoc.id,
+                                  'isOwner': confirmData['ownerId'] == FirebaseAuth.instance.currentUser!.uid,
+                                  'isRequester': confirmData['requesterId'] == FirebaseAuth.instance.currentUser!.uid,
+                                  'postTitle': postData['title'] ?? 'ไม่ระบุชื่อโพสต์',
+                                  'postImage': (postData['images'] != null &&
+                                                postData['images'].isNotEmpty &&
+                                                postData['images'][0].toString().startsWith('http'))
+                                      ? postData['images'][0]
+                                      : null,
+                                  'otherUserName': userData['username'] ?? 'ไม่ระบุ',
+                                  'timestamp': confirmData['createdAt']?.toDate().toString().substring(0, 16) ?? '-',
+                                  'type': confirmData['type'] ?? 'donate',
+                                },
+                              ),
+                            ),
+                          );
+                        },
+
                       child: _buildDealCard(data),
                     );
                   },

@@ -82,6 +82,8 @@ class _PostDetailPageState extends State<PostDetailPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initVideoIfAvailable();
       _fetchOwnerData();
+      _checkIfRequested();
+
 
     });
   }
@@ -95,6 +97,31 @@ class _PostDetailPageState extends State<PostDetailPage> {
     _videoController?.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  bool _alreadyRequested = false;
+  bool _isCheckingRequest = true;
+
+  Future<void> _checkIfRequested() async {
+    try {
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      final postId = widget.postData['postId'];
+      final result = await FirebaseFirestore.instance
+          .collection('confirmations')
+          .where('postId', isEqualTo: postId)
+          .where('requesterId', isEqualTo: currentUser.uid)
+          .limit(1)
+          .get();
+
+      setState(() {
+        _alreadyRequested = result.docs.isNotEmpty;
+        _isCheckingRequest = false;
+      });
+    } catch (e) {
+      debugPrint('❌ Error checking request: $e');
+    }
   }
 
   // =====================================================
@@ -188,6 +215,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
             : type == 'request'
                 ? 'มีคนเสนอของบริจาคให้คุณ 💗'
                 : 'มีคนอยากแลกของกับคุณ 💙',
+        'postId': postId,    
         'type': 'request',
         'isRead': false,
         'createdAt': timestamp,
@@ -599,7 +627,12 @@ Padding(
                                       EditPostPage(postData: data),
                                 ),
                               )
-                          : () => _sendRequest(context),
+                              : _alreadyRequested || _isCheckingRequest
+                                ? null // ❌ ปิดปุ่มถ้ากำลังเช็กหรือเคยขอไปแล้ว
+                                : () async {
+                                    await _sendRequest(context);
+                                    setState(() => _alreadyRequested = true); // ✅ อัปเดตสถานะทันที
+                                  },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
@@ -611,11 +644,13 @@ Padding(
                       child: Text(
                         isOwner
                             ? 'แก้ไขโพสต์ ✏️'
-                            : type == 'donate'
-                                ? 'ขอรับสิ่งของ 💛'
-                                : type == 'request'
-                                    ? 'ขอบริจาค 💗'
-                                    : 'ขอแลกเปลี่ยน 💙',
+                            : _alreadyRequested
+                                ? 'รอการตอบรับ ⏳'
+                                : type == 'donate'
+                                    ? 'ขอรับสิ่งของ 💛'
+                                    : type == 'request'
+                                        ? 'ขอบริจาค 💗'
+                                        : 'ขอแลกเปลี่ยน 💙',
                         style: const TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.bold,
