@@ -4,6 +4,7 @@ import 'package:punjai_app/screens/auth/update_password_screen.dart';
 import 'package:punjai_app/screens/profile/history_page.dart';
 import 'package:punjai_app/screens/auth/login_screen.dart';
 import 'package:punjai_app/screens/profile/edit_profile_screen.dart';
+import 'archived_posts_page.dart';
 
 class SettingsPage extends StatelessWidget {
   static const routeName = '/settings';
@@ -86,6 +87,20 @@ class SettingsPage extends StatelessWidget {
               Navigator.pushNamed(context, HistoryPage.routeName);
             },
           ),
+
+          _buildSettingItem(
+            context,
+            icon: Icons.archive_outlined,
+            title: "Archived Posts",
+            subtitle: "View and manage your expired posts",
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ArchivedPostsPage()),
+              );
+            },
+          ),
+
 
           const Divider(height: 32),
 

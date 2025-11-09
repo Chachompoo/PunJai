@@ -6,6 +6,7 @@ import '../posts/post_detail_page.dart';
 import 'package:video_player/video_player.dart';
 import 'followers_following_page.dart';
 import '../chat/ChatRoomPage.dart';
+import 'reviews_page.dart';
 
 // ===============================
 // 🔇 วิดีโอ preview ไม่มีเสียง เล่นวน
@@ -404,32 +405,73 @@ class _ProfileScreenState extends State<ProfileScreen>
                       ),
                     ],
                   ),
-                // 🔹 Trust Score
-                const SizedBox(height: 24),
-                const Text(
-                  'Trust Score',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: kText,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Center(
-                  child: StarRating(
-                    rating: rating,
-                    size: 26,
-                    filledColor: kPrimary,
-                    emptyColor: Colors.white,
-                    borderColor: kPrimary.withOpacity(0.4),
-                  ),
-                ),
-                Text(
-                  '${rating.toStringAsFixed(1)} / 5  ($ratingCount รีวิว)',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: kText.withOpacity(0.7)),
-                ),
+                // 🔹 Trust Score (Realtime Sync)
+                      StreamBuilder<DocumentSnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('users')
+                            .doc(widget.uid)
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) {
+                            return const Center(
+                              child: CircularProgressIndicator(color: Color(0xFFFF8FB1)),
+                            );
+                          }
+
+                          final userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+                          final rating = (userData['rating'] ?? 0.0).toDouble();
+                          final ratingCount = userData['ratingCount'] ?? 0;
+
+                          return Column(
+                            children: [
+                              const SizedBox(height: 24),
+                              const Text(
+                                'Trust Score',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: kText,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Center(
+                                child: StarRating(
+                                  rating: rating,
+                                  size: 26,
+                                  filledColor: kPrimary,
+                                  emptyColor: Colors.white,
+                                  borderColor: kPrimary.withOpacity(0.4),
+                                ),
+                              ),
+                              Text(
+                                '${rating.toStringAsFixed(1)} / 5  ($ratingCount รีวิว)',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: kText.withOpacity(0.7)),
+                              ),
+                              if (ratingCount > 0)
+                                TextButton.icon(
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ReviewsPage(
+                                        userId: widget.uid,
+                                        userName: name.isNotEmpty ? name : username,
+                                      ),
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.reviews_outlined, color: Colors.pinkAccent),
+                                label: const Text(
+                                  "ดูรีวิวทั้งหมด",
+                                  style: TextStyle(color: Colors.pinkAccent),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
 
                 const SizedBox(height: 16),
 

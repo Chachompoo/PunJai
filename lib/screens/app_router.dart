@@ -8,6 +8,8 @@ import 'auth/forgot_password_screen.dart';
 import 'auth/verify_code_screen.dart';
 import 'auth/password_reset_success_screen.dart';
 import 'auth/update_password_screen.dart';
+import 'admin/admin_user_detail_page.dart';
+import 'admin/admin_verification_page.dart';
 
 // 🔹 Home & Profile
 import 'home/home_screen.dart';

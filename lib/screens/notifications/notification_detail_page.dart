@@ -46,13 +46,24 @@ Future<void> _acceptDeal(Map<String, dynamic> notif, String notifId) async {
     final postTitle = postData?['title'] ?? 'ไม่ระบุชื่อโพสต์';
     final postType = postData?['type'] ?? 'unknown';
 
-    // ✅ อัปเดตสถานะ notification
+    // ✅ อัปเดตสถานะ notification เดิม
     await _firestore.collection('notifications').doc(notifId).update({
       'status': 'accepted',
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 🩷 เช็กหรือสร้าง confirmation ก่อน
+    // 🩷 ✅ สร้างแจ้งเตือนใหม่ให้ผู้ขอ (Requester)
+    await _firestore.collection('notifications').add({
+      'toUserId': requesterId,
+      'fromUserId': currentUser.uid,
+      'postId': postId,
+      'type': 'deal_accepted',
+      'message': 'คำขอของคุณสำหรับ "$postTitle" ได้รับการยอมรับแล้ว 🎉',
+      'isRead': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    // 🩵 เช็กหรือสร้าง confirmation ก่อน
     final confirmRef = _firestore.collection('confirmations');
     final existingConfirm = await confirmRef
         .where('postId', isEqualTo: postId)
@@ -91,21 +102,20 @@ Future<void> _acceptDeal(Map<String, dynamic> notif, String notifId) async {
       'dealTitle': postTitle,
       'dealType': postType,
       'dealStatus': 'in_progress',
-      'confirmId': confirmId, // ✅ ตรงนี้แหละที่สำคัญ
+      'confirmId': confirmId,
       'chatType': 'deal',
       'lastMessage': '',
       'updatedAt': FieldValue.serverTimestamp(),
       'createdAt': FieldValue.serverTimestamp(),
     });
-  
-  
-    // 🔁 แล้วอัปเดต confirm ให้รู้ว่า chat ไหนเชื่อมอยู่
+
+    // 🔁 อัปเดต confirm ให้รู้ว่า chat ไหนเชื่อมอยู่
     await confirmRef.doc(confirmId).update({
       'chatId': chatRef.id,
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // 🩷 เพิ่มข้อความระบบ
+    // 🩷 เพิ่มข้อความระบบในแชท
     await chatRef.collection('messages').add({
       'type': 'system',
       'text': '🎯 ดีลใหม่สำหรับโพสต์: $postTitle',

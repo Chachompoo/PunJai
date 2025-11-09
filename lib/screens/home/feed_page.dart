@@ -18,6 +18,7 @@ class _SilentVideoPreviewState extends State<SilentVideoPreview> {
   late VideoPlayerController _controller;
   bool _isInitialized = false;
 
+
   @override
   void initState() {
     super.initState();
@@ -54,14 +55,106 @@ class _SilentVideoPreviewState extends State<SilentVideoPreview> {
 class FeedPage extends StatefulWidget {
   const FeedPage({super.key});
   static const routeName = '/feed';
+
   @override
   State<FeedPage> createState() => _FeedPageState();
 }
 
+// ✅ ใส่ initState ที่นี่แทน
 class _FeedPageState extends State<FeedPage> {
   String selectedFilter = 'all';
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkExpiredPosts(); // ✅ ตอนนี้ถูกที่แล้ว
+  }
+
+// ✅ เพิ่มตรงนี้
+Future<void> _checkExpiredPosts() async {
+  final now = DateTime.now();
+  try {
+    final postsSnapshot = await _firestore
+        .collection('posts')
+        .where('status', isEqualTo: 'active')
+        .get();
+
+    for (final doc in postsSnapshot.docs) {
+      final data = doc.data();
+      final expireAt = (data['expireAt'] as Timestamp?)?.toDate();
+      final postId = doc.id;
+      final ownerId = data['ownerId'];
+      final title = data['title'] ?? 'โพสต์ของคุณ';
+
+      if (expireAt == null) continue;
+
+      final hoursLeft = expireAt.difference(now).inHours;
+
+      // ✅ 1. ใกล้หมดอายุ (<24 ชม.)
+      if (hoursLeft <= 24 && hoursLeft > 0) {
+        final existing = await _firestore
+            .collection('notifications')
+            .where('postId', isEqualTo: postId)
+            .where('type', isEqualTo: 'post_expiring')
+            .get();
+
+        if (existing.docs.isEmpty) {
+          await _firestore.collection('notifications').add({
+            'toUserId': ownerId,
+            'fromUserId': 'system',
+            'postId': postId,
+            'type': 'post_expiring',
+            'message':
+                'โพสต์ของคุณ "$title" ใกล้หมดอายุแล้ว ⏰',
+            'isRead': false,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+          debugPrint('⏰ แจ้งเตือนโพสต์ใกล้หมดอายุ: $title');
+        }
+      }
+
+      // ✅ 2. หมดอายุแล้วจริง
+      if (expireAt != null && expireAt.isBefore(now)) {
+      final postId = doc.id;
+      final ownerId = data['ownerId'];
+      final title = data['title'] ?? 'โพสต์ของคุณ';
+      final quantity = (data['quantity'] ?? 0) as int;
+
+      // 🚫 ข้ามโพสต์ที่บริจาคครบแล้ว (ของหมด)
+      if (quantity <= 0) {
+        debugPrint('⏩ ข้ามโพสต์ "$title" เพราะบริจาคครบแล้ว');
+        continue;
+      }
+
+      // ✅ ถ้าไม่หมดของและถึงวันหมดอายุ → อัปเดตเป็น expired
+      await _firestore.collection('posts').doc(postId).update({
+        'status': 'expired',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      await _firestore.collection('notifications').add({
+        'toUserId': ownerId,
+        'fromUserId': 'system',
+        'postId': postId,
+        'type': 'post_expired',
+        'message':
+            'โพสต์ของคุณ "$title" หมดอายุแล้วและถูกเก็บไว้ในหน้าเก็บโพสต์ 📦',
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint('📦 หมดอายุโพสต์: $title');
+    }
+
+    }
+  } catch (e) {
+    debugPrint('❌ Error checking expired posts: $e');
+  }
+}
+
+
 
   final colorMap = {
     'donate': const Color(0xFFFFF7CC),
@@ -361,75 +454,86 @@ class _FeedPageState extends State<FeedPage> {
                                         ),
 
 
-                                        // 🔹 เนื้อหาโพสต์
                                         Padding(
                                           padding: const EdgeInsets.all(16.0),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                data['title'] ?? 'ไม่มีชื่อโพสต์',
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 18,
-                                                  color: Colors.black87,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                data['description'] ?? 'ไม่มีรายละเอียด',
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 14,
-                                                  color: Colors.black54,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 12),
-                                              Align(
-                                                alignment: Alignment.centerRight,
-                                                child: ownerId ==
-                                                        _auth.currentUser?.uid
-                                                    ? const SizedBox.shrink()
-                                                    : ElevatedButton(
-                                                        onPressed: alreadyRequested
-                                                            ? null
-                                                            : () => _handleRequestAction(data),
-                                                        style: ElevatedButton.styleFrom(
-                                                          backgroundColor: alreadyRequested
-                                                              ? Colors.grey
-                                                              : type == 'donate'
-                                                                  ? const Color(0xFFFFD84D)
-                                                                  : type == 'request'
-                                                                      ? const Color(0xFFFF8FBF)
-                                                                      : const Color(0xFF7EC8E3),
-                                                          foregroundColor: Colors.white,
-                                                          shape: RoundedRectangleBorder(
-                                                            borderRadius:
-                                                                BorderRadius.circular(30),
-                                                          ),
-                                                          padding:
-                                                              const EdgeInsets.symmetric(
+                                          child: Builder(
+                                            builder: (context) {
+                                              // ✅ ต้องประกาศตัวแปรที่นี่ (นอก widget tree)
+                                              final type = data['type'] ?? 'donate'; // เพิ่มบรรทัดนี้
+                                              final quantity = (data['quantity'] ?? 0) as int;
+                                              final isOutOfStock = (type == 'donate') && quantity <= 0;
+
+
+                                              return Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    data['title'] ?? 'ไม่มีชื่อโพสต์',
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 18,
+                                                      color: Colors.black87,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    data['description'] ?? 'ไม่มีรายละเอียด',
+                                                    maxLines: 2,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      color: Colors.black54,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 12),
+
+                                                  Align(
+                                                    alignment: Alignment.centerRight,
+                                                    child: ownerId == _auth.currentUser?.uid
+                                                        ? const SizedBox.shrink()
+                                                        : ElevatedButton(
+                                                            onPressed: isOutOfStock || alreadyRequested
+                                                                ? null
+                                                                : () => _handleRequestAction(data),
+                                                            style: ElevatedButton.styleFrom(
+                                                              backgroundColor: isOutOfStock
+                                                                  ? Colors.grey.shade400
+                                                                  : alreadyRequested
+                                                                      ? Colors.grey
+                                                                      : type == 'donate'
+                                                                          ? const Color(0xFFFFD84D)
+                                                                          : type == 'request'
+                                                                              ? const Color(0xFFFF8FBF)
+                                                                              : const Color(0xFF7EC8E3),
+                                                              foregroundColor: Colors.white,
+                                                              shape: RoundedRectangleBorder(
+                                                                borderRadius: BorderRadius.circular(30),
+                                                              ),
+                                                              padding: const EdgeInsets.symmetric(
                                                                   horizontal: 22, vertical: 10),
-                                                        ),
-                                                        child: Text(
-                                                          alreadyRequested
-                                                              ? 'รอการตอบรับ ⏳'
-                                                              : type == 'donate'
-                                                                  ? 'ขอรับสิ่งนี้'
-                                                                  : type == 'request'
-                                                                      ? 'ขอบริจาค'
-                                                                      : 'ขอแลก',
-                                                        ),
-                                                      ),
-                                              ),
-                                            ],
+                                                            ),
+                                                            child: Text(
+                                                              isOutOfStock
+                                                                  ? 'บริจาคครบแล้ว 💖'
+                                                                  : alreadyRequested
+                                                                      ? 'รอการตอบรับ ⏳'
+                                                                      : type == 'donate'
+                                                                          ? 'ขอรับสิ่งนี้'
+                                                                          : type == 'request'
+                                                                              ? 'ขอบริจาค'
+                                                                              : 'ขอแลก',
+                                                            ),
+                                                          ),
+                                                  ),
+                                                ],
+                                              );
+                                            },
                                           ),
-                                        ),
-                                      ],
-                                    ),
+                                         ),
+                                      ]
                                   ),
                                 ),
+                                )
                               );
                             },
                           );

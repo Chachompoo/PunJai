@@ -204,35 +204,59 @@ Future<void> _createChatIfNotExist(String giverId, String receiverId) async {
           'updatedAt': FieldValue.serverTimestamp(),
         });
 
-        if (data['giverId'] != null && data['giverId'].toString().isNotEmpty) {
-          await _addDonationPoint(data['giverId']);
-          await _showReviewDialog(data['giverId'], confirmationId);
+        final giverId = data['giverId'];
+        final receiverId = data['receiverId'] ?? otherUserId;
+        final postType = data['postType'] ?? 'donate';
+
+        // 🩷 เพิ่มแต้มให้ผู้บริจาค (เฉพาะโพสต์บริจาค)
+        if (postType == 'donate' && giverId != null && giverId.isNotEmpty) {
+          await _addDonationPoint(giverId);
+          await _showReviewDialog(giverId, confirmationId);
         }
 
-        // ✅ เพิ่มแต้มให้ผู้บริจาค (ต้องมีฟิลด์ giverId ใน document confirmations)
-        if (data['giverId'] != null && data['giverId'].toString().isNotEmpty) {
-          await _addDonationPoint(data['giverId']);
+        // 💬 แจ้งเตือนเมื่อดีลเสร็จสิ้น
+        if (postType == 'donate') {
+          // ✅ แจ้งทั้งสองฝ่าย
+          await _firestore.collection('notifications').add({
+            'toUserId': giverId,
+            'fromUserId': receiverId,
+            'type': 'deal_completed',
+            'message': 'ผู้รับบริจาคยืนยันการรับพัสดุแล้ว 🎁\n'
+                'การบริจาคเสร็จสิ้น ขอบคุณที่เป็นส่วนหนึ่งของการแบ่งปัน PunJai 💗',
+            'isRead': false,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
 
-          // ✅ สร้างห้องแชตระหว่างผู้ให้และผู้รับ
-          final giverId = data['giverId'];
-          final receiverId = data['receiverId'] ?? otherUserId;
-          await _createChatIfNotExist(giverId, receiverId);
+          await _firestore.collection('notifications').add({
+            'toUserId': receiverId,
+            'fromUserId': giverId,
+            'type': 'deal_completed',
+            'message': 'คุณได้ยืนยันการรับพัสดุเรียบร้อยแล้ว 💝\n'
+                'ขอบคุณที่ร่วมแบ่งปันกับ PunJai 🌷',
+            'isRead': false,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        } else if (postType == 'swap') {
+          // 💙 สำหรับการแลกเปลี่ยน (ทั้งสองฝ่ายเท่ากัน)
+          for (final uid in [giverId, receiverId]) {
+            await _firestore.collection('notifications').add({
+              'toUserId': uid,
+              'fromUserId': uid == giverId ? receiverId : giverId,
+              'type': 'deal_completed',
+              'message': '🎉 การแลกเปลี่ยนของคุณสำเร็จแล้ว!\n'
+                  'ขอบคุณที่ร่วมแบ่งปันและสร้างรอยยิ้มกับ PunJai 💙',
+              'isRead': false,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+          }
         }
-
-
-        await _firestore.collection('notifications').add({
-          'toUserId': otherUserId,
-          'type': 'deal_completed',
-          'message': 'ดีลสำเร็จแล้ว! ขอบคุณที่แบ่งปัน 💖',
-          'isRead': false,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('🎉 ดีลนี้สำเร็จเรียบร้อยแล้ว')),
         );
         return;
       }
+
     } else {
       // 🟡 owner ยอมรับ / ปฏิเสธ
       await confirmationRef.update({
@@ -253,6 +277,53 @@ Future<void> _createChatIfNotExist(String giverId, String receiverId) async {
         'isRead': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
+
+      // ✅ ถ้าสถานะคือ waitingConfirm (แปลว่าผู้บริจาคเริ่มจัดส่งของ)
+if (status == 'waitingConfirm') {
+  try {
+    // ดึง postId ของโพสต์จากเอกสาร confirmation
+    final postId = data['postId'];
+    final postTitle = data['postTitle'] ?? 'โพสต์ของคุณ';
+    final sentQty = (data['sentQty'] ?? 1) as int; // จำนวนของที่จัดส่ง (แก้ตาม field ของชมพูได้เลย)
+    final ownerId = data['ownerId'];
+
+    final postRef = _firestore.collection('posts').doc(postId);
+
+    // 🔹 ลดจำนวนลงใน Firestore
+    await _firestore.runTransaction((tx) async {
+      final snapshot = await tx.get(postRef);
+      if (!snapshot.exists) return;
+      final currentQty = (snapshot['quantity'] ?? 0) as int;
+      final newQty = currentQty - sentQty;
+
+      tx.update(postRef, {
+        'quantity': newQty < 0 ? 0 : newQty,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+
+    // 🔹 ตรวจสอบถ้าจำนวนเหลือ 0 ให้สร้างแจ้งเตือนใหม่
+    final updatedPost = await postRef.get();
+    final updatedQty = (updatedPost['quantity'] ?? 0) as int;
+
+    if (updatedQty <= 0) {
+      await _firestore.collection('notifications').add({
+        'toUserId': ownerId,
+        'fromUserId': 'system',
+        'postId': postId,
+        'type': 'out_of_stock',
+        'message': '🎉 โพสต์ "$postTitle" ของคุณบริจาคครบแล้ว!',
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    debugPrint('📦 อัปเดตจำนวนของในโพสต์สำเร็จ');
+  } catch (e) {
+    debugPrint('❌ Error updating quantity: $e');
+  }
+}
+
 
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(status == 'accepted'

@@ -2,6 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'notification_detail_page.dart';
+import '../profile/reviews_page.dart';  
+import '../profile/profile_screen.dart'; 
+import 'package:flutter/scheduler.dart';
+import '../profile/history_detail_page.dart';
+import '../posts/post_detail_page.dart';
+
 
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
@@ -88,6 +94,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
           'icon': Icons.volunteer_activism,
           'color': const Color(0xFFFFC1C1),
         };
+      case 'deal_accepted': // ✅ แจ้งเตือนเมื่อเจ้าของโพสต์ยอมรับดีล
+        return {
+          'icon': Icons.handshake_rounded,
+          'color': const Color(0xFFA5D6A7), // เขียวมิ้นต์พาสเทล
+        };
       case 'accept':
         return {
           'icon': Icons.check_circle_outline,
@@ -123,11 +134,38 @@ class _NotificationsPageState extends State<NotificationsPage> {
           'icon': Icons.chat_bubble_outline,
           'color': Colors.grey.shade500,
         };
+      case 'points_awarded': // ✅ แก้เพิ่ม
+        return {
+          'icon': Icons.favorite_rounded,
+          'color': const Color(0xFFFF8FB1),
+        };
+      case 'review_received': // ✅ แก้เพิ่ม
+        return {
+          'icon': Icons.star_rounded,
+          'color': const Color(0xFFFFC947),
+        };
+      case 'trust_updated': // ✅ แก้เพิ่ม
+        return {
+          'icon': Icons.verified_rounded,
+          'color': const Color(0xFF9EDAFF),
+        };
       case 'system':
         return {
           'icon': Icons.card_giftcard,
           'color': const Color(0xFFFF8FB1),
         };
+      case 'post_expiring':
+        return {
+          'icon': Icons.timer_outlined,
+          'color': const Color(0xFFB39DDB), // ม่วงพาสเทล ⏰
+        };
+      case 'out_of_stock':
+        return {
+          'icon': Icons.inventory_2_outlined,
+          'color': const Color(0xFFBDBDBD),
+        };
+
+
       // 🔥 ส่วนยกเลิกดีล
       case 'cancel_request':
       case 'cancel_donate':
@@ -145,7 +183,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     }
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBg,
@@ -186,6 +224,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
           }
 
           final docs = snapshot.data?.docs ?? [];
+
+          // 🩷 เพิ่ม debug log เพื่อตรวจว่ามีแจ้งเตือนเข้ามากี่รายการ
+          print('📬 จำนวนแจ้งเตือนทั้งหมด: ${docs.length}');
+
           if (docs.isEmpty) {
             return const Center(
               child: Text(
@@ -199,9 +241,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
               .map((d) => {'id': d.id, ...d.data() as Map<String, dynamic>})
               .toList();
 
+          // 🩷 เพิ่ม shrinkWrap และ physics เพื่อแก้ Infinite Size error
           return ListView.builder(
             padding: const EdgeInsets.all(16),
             itemCount: notifications.length,
+            shrinkWrap: true, // 🩷 แก้ตรงนี้
+            physics: const BouncingScrollPhysics(), // 🩷 แก้ตรงนี้
             itemBuilder: (context, index) {
               final data = notifications[index];
               final docId = data['id'];
@@ -214,24 +259,63 @@ class _NotificationsPageState extends State<NotificationsPage> {
               final style = _getTypeStyle(type);
               final icon = style['icon'] as IconData;
               final color = style['color'] as Color;
-
+              
               return GestureDetector(
-                onTap: () {
-                  _markAsRead(docId);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
+                onTap: () async {
+                  if (!mounted) return;
+
+                  final currentType = (data['type'] ?? '').toString().toLowerCase();
+                  final targetData = Map<String, dynamic>.from(data);
+                  final targetDocId = docId;
+
+                  // ✅ markAsRead แต่ไม่รอผล (ไม่ block context)
+                  _firestore.collection('notifications').doc(docId).update({'isRead': true});
+
+                  await Future.microtask(() {});
+
+                  if (!mounted) return;
+
+                  final currentUser = _auth.currentUser;
+                  final firestore = FirebaseFirestore.instance;
+
+                  // 🌟 6. แจ้งเตือนดีล: ขอรับ / เสนอ / แลก (ไปหน้า NotificationDetailPage)
+                  if (currentType.contains('deal_request') ||
+                      currentType.contains('deal_offer') ||
+                      currentType.contains('deal_swap')) {
+                    Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => NotificationDetailPage(
-                        notificationData: data,
-                        notificationId: docId,
+                        notificationData: targetData,
+                        notificationId: targetDocId,
                       ),
+                    ));
+                    return;
+                  }
+
+                  // 🌟 7. แจ้งเตือนโพสต์ใกล้หมดอายุ หรือหมดอายุแล้ว (ไปหน้า PostDetailPage)
+                  if (currentType.contains('post_expiring') ||
+                      currentType.contains('post_expired')) {
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => PostDetailPage(
+                        postData: {'postId': targetData['postId'] ?? ''},
+                      ),
+                    ));
+                    return;
+                  }
+
+                  // 🩷 8. Default fallback
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => NotificationDetailPage(
+                      notificationData: targetData,
+                      notificationId: targetDocId,
                     ),
-                  );
-                },
+                  ));
+
+                }, // 🩷 ✅ ปิด onTap ให้ครบ
+
+                // ✅ child อยู่ถัดจาก onTap (ใน GestureDetector)
                 child: Container(
                   margin: const EdgeInsets.only(bottom: 12),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   decoration: BoxDecoration(
                     color: isRead ? Colors.white.withOpacity(0.7) : Colors.white,
                     borderRadius: BorderRadius.circular(16),
@@ -255,8 +339,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                           message,
                           style: TextStyle(
                             color: kText,
-                            fontWeight:
-                                isRead ? FontWeight.normal : FontWeight.w600,
+                            fontWeight: isRead ? FontWeight.normal : FontWeight.w600,
                             fontSize: 15,
                           ),
                         ),
@@ -268,9 +351,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
                     ],
                   ),
                 ),
-              );
+              ); // 🩷 ✅ ปิด GestureDetector ที่นี่
             },
-          );
+          ); // 🩷 ✅ ปิด ListView.builder
         },
       ),
     );

@@ -8,6 +8,9 @@ import 'package:punjai_app/screens/home/feed_page.dart';
 import 'package:punjai_app/screens/home/search_page.dart';
 import 'package:punjai_app/screens/home/top_donors_page.dart';
 import 'package:punjai_app/widgets/punjai_appbar.dart';
+import '../admin/admin_verification_page.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 
 class HomeScreen extends StatefulWidget {
   static const routeName = '/home';
@@ -20,20 +23,35 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _auth = FirebaseAuth.instance;
   int _selectedIndex = 0;
+  bool _isAdmin = false;
 
   @override
-  void initState() {
-    super.initState();
-    if (_auth.currentUser == null) {
-      Future.microtask(() {
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
-      });
-    }
+void initState() {
+  super.initState();
+  if (_auth.currentUser == null) {
+    Future.microtask(() {
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    });
+  } else {
+    _checkAdminRole(); // 🩷 ตรวจสอบว่าเป็นแอดมินไหม
   }
+}
+
+Future<void> _checkAdminRole() async {
+  final user = _auth.currentUser;
+  if (user == null) return;
+  final doc =
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+  if (doc.exists && doc.data()?['role'] == 'admin') {
+    setState(() => _isAdmin = true);
+  }
+}
+
+  
 
   Widget _buildCurrentPage() {
     switch (_selectedIndex) {
@@ -71,6 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return const Center(child: Text('หน้าที่ไม่พบค่ะ 🚫'));
     }
   }
+  
 
   // 🌸 หน้าเลือกประเภทโพสต์ (Animated Float Style)
   Widget _buildPostTypeSelector(BuildContext context) {
@@ -156,7 +175,28 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: const Color(0xFFFFFFFF),
-      appBar: _selectedIndex == 0 ? const PunjaiAppBar() : null,
+      appBar: _selectedIndex == 0
+    ? AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        title: const PunjaiAppBar(),
+        actions: [
+          if (_isAdmin)
+            IconButton(
+              tooltip: 'ตรวจสอบสมาชิกใหม่',
+              icon: const Icon(Icons.verified_user_rounded, color: Color(0xFFFF8FB1)),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AdminVerificationPage()),
+                );
+              },
+            ),
+        ],
+      )
+    : null,
+
 
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 450),

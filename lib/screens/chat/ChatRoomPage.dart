@@ -117,7 +117,7 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
               ),
               const SizedBox(height: 2),
               Text(
-                "$displayType: ",
+                "$displayType: $title",
                 style: const TextStyle(fontSize: 13, color: Colors.black54),
               ),
             ],
@@ -353,35 +353,72 @@ class _ChatRoomPageState extends State<ChatRoomPage> {
 
   // 🚀 ส่งข้อความ
   Future<void> _sendMessage() async {
-    final currentUser = _auth.currentUser;
-    if (currentUser == null || _msgCtrl.text.trim().isEmpty) return;
+  final text = _msgCtrl.text.trim();
+  if (text.isEmpty) return;
 
-    final text = _msgCtrl.text.trim();
-    _msgCtrl.clear();
+  final currentUser = _auth.currentUser;
+  if (currentUser == null) return;
 
-    await _firestore
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('messages')
-        .add({
-      'senderId': currentUser.uid,
-      'text': text,
-      'type': 'user',
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+  // ✅ ดึงชื่อจาก Firestore
+  final userDoc = await _firestore.collection('users').doc(currentUser.uid).get();
+  final userData = userDoc.data();
+  final firstname = userData?['firstname'] ?? '';
+  final lastname = userData?['lastname'] ?? '';
+  final fullName = (firstname + ' ' + lastname).trim().isNotEmpty
+      ? '$firstname $lastname'
+      : (currentUser.displayName ?? 'ผู้ใช้ PunJai');
 
-    // อัปเดต lastMessage
-    await _firestore.collection('chats').doc(widget.chatId).update({
-      'lastMessage': text,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+  // ✅ 1. เพิ่มข้อความลง Firestore
+  await _firestore
+      .collection('chats')
+      .doc(widget.chatId)
+      .collection('messages')
+      .add({
+    'text': text,
+    'senderId': currentUser.uid,
+    'createdAt': FieldValue.serverTimestamp(),
+    'type': 'text',
+  });
 
-    _scrollCtrl.animateTo(
-      _scrollCtrl.position.maxScrollExtent + 80,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
+  // ✅ 2. อัปเดต lastMessage
+  await _firestore.collection('chats').doc(widget.chatId).update({
+    'lastMessage': text,
+    'updatedAt': FieldValue.serverTimestamp(),
+  });
+
+  // ✅ 3. เคลียร์ช่องข้อความ
+  _msgCtrl.clear();
+
+  // ✅ 4. ดึงข้อมูลห้องแชท เพื่อหาว่าอีกฝ่ายคือใคร
+  final chatDoc =
+      await _firestore.collection('chats').doc(widget.chatId).get();
+  final chatData = chatDoc.data();
+  if (chatData != null) {
+    final participants = List<String>.from(chatData['participants'] ?? []);
+    final receiverId = participants.firstWhere(
+      (id) => id != currentUser.uid,
+      orElse: () => '',
     );
+
+    // ✅ 5. สร้างแจ้งเตือนให้ผู้รับ (ยกเว้นข้อความ system)
+    if (receiverId.isNotEmpty &&
+        !text.startsWith('🎯') &&
+        !text.startsWith('📦')) {
+      await _firestore.collection('notifications').add({
+        'toUserId': receiverId,
+        'fromUserId': currentUser.uid,
+        'chatId': widget.chatId,
+        'type': 'chat',
+        'message': 'คุณมีข้อความใหม่จาก $fullName 💬',
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
+}
+
+
+
 
   // 🖼 ส่งรูปภาพ
   Future<void> _sendImage() async {

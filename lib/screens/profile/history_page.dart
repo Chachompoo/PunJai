@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:uuid/uuid.dart';
 import 'history_detail_page.dart';
 import 'package:punjai_app/widgets/fade_slide_route.dart';
 
@@ -24,6 +25,7 @@ class _HistoryPageState extends State<HistoryPage>
   String? _filterType; // donate / request / swap / null = all
   String? _filterTime; // week / month / all
   late TabController _tabController;
+  
 
   @override
   void initState() {
@@ -136,6 +138,20 @@ class _HistoryPageState extends State<HistoryPage>
     );
   }
   
+  Future<bool> _hasReviewed(String dealId) async {
+  final currentUser = _auth.currentUser;
+  if (currentUser == null) return false;
+
+  final snap = await _firestore
+      .collection('reviews')
+      .where('dealId', isEqualTo: dealId)
+      .where('reviewerId', isEqualTo: currentUser.uid)
+      .limit(1)
+      .get();
+
+  return snap.docs.isNotEmpty;
+}
+
   // 🩵 Card ของแต่ละดีล (structure)
   Widget _buildDealCard(Map<String, dynamic> data) {
 
@@ -313,19 +329,36 @@ class _HistoryPageState extends State<HistoryPage>
               // 🌷 ทั้งบล็อกนี้ด้านล่างมนจะไม่แตะเลย
               const SizedBox(width: 10),
               Expanded(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.star_outline),
-                  label: const Text("รีวิว"),
-                  onPressed: () {}, // TODO: เปิด Review Dialog
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFFF8FB1),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
+                child: FutureBuilder<bool>(
+                  future: _hasReviewed(data['confirmId']),
+                  builder: (context, snapshot) {
+                    final alreadyReviewed = snapshot.data ?? false;
+                    final canReview = status == 'completed' && !alreadyReviewed;
+
+                    return ElevatedButton.icon(
+                      icon: Icon(
+                        alreadyReviewed ? Icons.star : Icons.star_outline,
+                        color: Colors.white,
+                      ),
+                      label: Text(
+                        alreadyReviewed ? "รีวิวแล้ว" : "รีวิว",
+                      ),
+                      onPressed: canReview
+                          ? () => _openReviewDialog(data)
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            alreadyReviewed ? Colors.grey : const Color(0xFFFF8FB1),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
+
             ],
           ),
 
@@ -334,39 +367,189 @@ class _HistoryPageState extends State<HistoryPage>
     );
   }
 
-  // 🧩 สร้างแท็กสถานะ
-  Widget _statusTag(String status) {
-    Color bg;
-    String text;
-    switch (status) {
-      case 'completed':
-        bg = Colors.green;
-        text = "เสร็จสิ้น";
-        break;
-      case 'accepted':
-      case 'shipping':
-        bg = Colors.orange;
-        text = "กำลังดำเนินการ";
-        break;
-      case 'rejected':
-        bg = Colors.redAccent;
-        text = "ถูกปฏิเสธ";
-        break;
-      default:
-        bg = Colors.grey;
-        text = "รอดำเนินการ";
+  Future<void> _openReviewDialog(Map<String, dynamic> deal) async {
+  final currentUser = _auth.currentUser;
+  if (currentUser == null) return;
+
+  double rating = 5;
+  final commentCtrl = TextEditingController();
+
+  await showDialog(
+    context: context,
+    builder: (_) => StatefulBuilder(
+      builder: (context, setSt) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: const Color(0xFFFFF7FB),
+          title: const Text("ให้คะแนนดีลนี้ 💖", style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: commentCtrl,
+                decoration: const InputDecoration(
+                  hintText: 'เขียนความคิดเห็นถึงคู่ดีล...',
+                ),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 12),
+              Slider(
+                value: rating,
+                min: 1,
+                max: 5,
+                divisions: 4,
+                label: '${rating.round()} ดาว',
+                activeColor: const Color(0xFFFF8FB1),
+                onChanged: (v) => setSt(() => rating = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("ยกเลิก"),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF8FB1),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () async {
+                await _submitReview(deal, commentCtrl.text.trim(), rating);
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: const Text("ส่งรีวิว"),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+Future<void> _submitReview(Map<String, dynamic> deal, String comment, double rating) async {
+  try {
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) return;
+
+    final firestore = FirebaseFirestore.instance;
+    final reviewerId = currentUser.uid;
+    final reviewedUserId = deal['otherUserId'];
+    final confirmationId = deal['confirmId'];
+
+    // 1️⃣ เพิ่มรีวิวใหม่
+    await firestore.collection('reviews').add({
+      'reviewId': const Uuid().v4(),
+      'reviewerId': reviewerId,
+      'reviewedUserId': reviewedUserId,
+      'dealId': confirmationId,
+      'comment': comment,
+      'rating': rating,
+      'createdAt': Timestamp.now(),
+    });
+
+    // 2️⃣ กันรีวิวซ้ำ
+    await firestore.collection('confirmations').doc(confirmationId).update({
+      'isReviewed': true,
+    });
+
+    // 3️⃣ แจ้งเตือนผู้ถูกรีวิว
+    await firestore.collection('notifications').add({
+      'type': 'review_received',
+      'fromUserId': reviewerId,
+      'toUserId': reviewedUserId,
+      'confirmationId': confirmationId,
+      'message': '⭐ คุณได้รับรีวิวใหม่จาก ${currentUser.displayName ?? "ผู้ใช้ PunJai"}!',
+      'isRead': false,
+      'createdAt': Timestamp.now(),
+    });
+
+    // 4️⃣ คำนวณคะแนนเฉลี่ยใหม่
+    final reviewsSnap = await firestore
+        .collection('reviews')
+        .where('reviewedUserId', isEqualTo: reviewedUserId)
+        .get();
+
+    if (reviewsSnap.docs.isNotEmpty) {
+      double total = 0;
+      for (final d in reviewsSnap.docs) {
+        total += (d['rating'] ?? 0).toDouble();
+      }
+      final avg = total / reviewsSnap.docs.length;
+      final count = reviewsSnap.docs.length;
+      final trust = (avg * 20).clamp(0, 100);
+
+      await firestore.collection('users').doc(reviewedUserId).update({
+        'rating': double.parse(avg.toStringAsFixed(2)),
+        'ratingCount': count,
+        'trustScore': trust,
+      });
+
+      await firestore.collection('notifications').add({
+        'type': 'trust_updated',
+        'fromUserId': 'system',
+        'toUserId': reviewedUserId,
+        'message': '⭐ คะแนนความน่าเชื่อถืออัปเดตเป็น ${avg.toStringAsFixed(1)} ดาว!',
+        'isRead': false,
+        'createdAt': Timestamp.now(),
+      });
     }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration:
-          BoxDecoration(color: bg.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-      child: Text(
-        text,
-        style: TextStyle(color: bg, fontWeight: FontWeight.w600, fontSize: 12),
-      ),
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('ส่งรีวิวเรียบร้อยแล้ว 💖')),
+    );
+  } catch (e) {
+    debugPrint('submitReview error: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('ส่งรีวิวไม่สำเร็จ: $e')),
     );
   }
+}
+Widget _statusTag(String status) {
+  Color bg;
+  String text;
+
+  switch (status) {
+    case 'accepted':
+    case 'in_progress':
+    case 'shipping':
+      bg = Colors.orange;
+      text = "กำลังดำเนินการ";
+      break;
+
+    case 'completed':
+      bg = Colors.green;
+      text = "เสร็จสิ้น";
+      break;
+
+    case 'rejected':
+      bg = Colors.redAccent;
+      text = "ถูกปฏิเสธ";
+      break;
+
+    case 'pending':
+    default:
+      bg = Colors.grey;
+      text = "รอดำเนินการ";
+  }
+
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    decoration: BoxDecoration(
+      color: bg.withOpacity(0.1),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Text(
+      text,
+      style: TextStyle(
+        color: bg,
+        fontWeight: FontWeight.w600,
+        fontSize: 12,
+      ),
+    ),
+  );
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -417,187 +600,180 @@ class _HistoryPageState extends State<HistoryPage>
       ),
     );
   }
-
-  
-
-    
-    // 🔹 รายการประวัติ (ใช้ Firestore จริง)
-  Widget _buildHistoryList(String tabType) {
-    final currentUser = _auth.currentUser;
-    if (currentUser == null) {
-      return const Center(child: Text("กรุณาเข้าสู่ระบบก่อน 💗"));
-    }
-
-    print("🔍 currentUser.uid = ${currentUser.uid}");
+ 
 
     // ใช้ FutureBuilder แทน StreamBuilder เพื่อหลีกเลี่ยง stream ซ้ำ
-    return FutureBuilder<List<QuerySnapshot>>(
-      future: Future.wait([
-        _firestore
-            .collection('confirmations')
-            .where('ownerId', isEqualTo: currentUser.uid)
-            .get(),
-        _firestore
-            .collection('confirmations')
-            .where('requesterId', isEqualTo: currentUser.uid)
-            .get(),
-      ]),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: Color(0xFFFF8FB1)),
-          );
-        }
+    Widget _buildHistoryList(String tabType) {
+  final currentUser = _auth.currentUser;
+  if (currentUser == null) {
+    return const Center(child: Text("กรุณาเข้าสู่ระบบก่อน 💗"));
+  }
 
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
-          return const Center(
-            child: Text("ยังไม่มีข้อมูล 💗", style: TextStyle(color: Colors.grey)),
-          );
-        }
+  // 🌸 Stream ทั้งฝั่ง owner และ requester
+  final ownerStream = _firestore
+      .collection('confirmations')
+      .where('ownerId', isEqualTo: currentUser.uid)
+      .snapshots();
 
-        // รวมผลลัพธ์จากทั้งสอง query
-        final allDocs = [
-          ...snapshot.data![0].docs,
-          ...snapshot.data![1].docs,
-        ];
+  final requesterStream = _firestore
+      .collection('confirmations')
+      .where('requesterId', isEqualTo: currentUser.uid)
+      .snapshots();
 
-        // 🔹 ลบข้อมูลซ้ำ
-        final uniqueDocs = allDocs.fold<Map<String, DocumentSnapshot>>({}, (map, doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          final key = data['confirmationId'] ?? data['postId'];
-          map[key] = doc;
-          return map;
-        }).values.toList();
+  // 🎀 รวม 2 stream เข้าด้วยกัน (ใช้ Rx.combineLatest2 ที่ชมพู import ไว้แล้ว)
+  return FutureBuilder<List<QuerySnapshot>>(
+  future: Future.wait([
+    _firestore
+        .collection('confirmations')
+        .where('ownerId', isEqualTo: currentUser.uid)
+        .get(),
+    _firestore
+        .collection('confirmations')
+        .where('requesterId', isEqualTo: currentUser.uid)
+        .get(),
+  ]),
+  builder: (context, snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(
+        child: CircularProgressIndicator(color: Color(0xFFFF8FB1)),
+      );
+    }
 
-        print("✅ [DEBUG] Firestore หลังลบซ้ำเหลือ ${uniqueDocs.length} รายการ");
+    if (!snapshot.hasData) {
+      return const Center(
+        child: Text("ยังไม่มีข้อมูล 💗", style: TextStyle(color: Colors.grey)),
+      );
+    }
 
-        // 🩷 กรองตามแท็บ
-        List<DocumentSnapshot> filteredDocs = uniqueDocs;
-        if (tabType == "ongoing") {
-          filteredDocs = uniqueDocs
-              .where((d) {
-                final s = (d.data() as Map<String, dynamic>)['status'];
-                return ["pending", "accepted", "shipping"].contains(s);
-              })
-              .toList();
-        } else if (tabType == "completed") {
-          filteredDocs = uniqueDocs.where((d) {
-            final s = ((d.data() as Map<String, dynamic>)['status'] ?? '').toString().toLowerCase();
-            return s == "completed" || s == "done" || s == "success";
-          }).toList();
-        }
-        // 🩷 กรองตามฟิลเตอร์
-        if (filteredDocs.isEmpty) {
-          return const Center(
-            child: Text(
-              "ยังไม่มีการดำเนินการในหมวดนี้ 💗",
-              style: TextStyle(color: Colors.grey),
-            ),
-          );
-        }
+    // รวมข้อมูล 2 ฝั่ง
+    final allDocs = [...snapshot.data![0].docs, ...snapshot.data![1].docs];
 
-        print("✅ [DEBUG] Firestore ได้ข้อมูลรวม ${filteredDocs.length} รายการ");
-        for (var d in filteredDocs) {
-          print("🩷 status found = ${(d.data() as Map<String, dynamic>)['status']}");
-        }
+    // 🔹 ลบข้อมูลซ้ำ
+    final uniqueDocs = allDocs.fold<Map<String, DocumentSnapshot>>({}, (map, doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      final key = data['confirmationId'] ?? data['postId'];
+      map[key] = doc;
+      return map;
+    }).values.toList();
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: filteredDocs.length,
-          itemBuilder: (context, index) {
-            final confirmation =
-                filteredDocs[index].data() as Map<String, dynamic>;
-            final postId = confirmation['postId'];
-            final otherUserId = (confirmation['ownerId'] == currentUser.uid)
-                ? confirmation['requesterId']
-                : confirmation['ownerId'];
+    // 🩷 กรองตามแท็บ
+    List<DocumentSnapshot> filteredDocs = uniqueDocs;
+    if (tabType == "ongoing") {
+      filteredDocs = uniqueDocs.where((d) {
+        final s = ((d.data() as Map<String, dynamic>)['status'] ?? '')
+            .toString()
+            .toLowerCase();
+        return ["accepted", "in_progress", "shipping"].contains(s);
+      }).toList();
+    } else if (tabType == "completed") {
+      filteredDocs = uniqueDocs.where((d) {
+        final s = ((d.data() as Map<String, dynamic>)['status'] ?? '')
+            .toString()
+            .toLowerCase();
+        return ["completed", "done", "success"].contains(s);
+      }).toList();
+    }
+
+    if (filteredDocs.isEmpty) {
+      return const Center(
+        child: Text(
+          "ยังไม่มีการดำเนินการในหมวดนี้ 💗",
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
+
+    // 🔄 แสดงรายการดีลแบบเดิม
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: filteredDocs.length,
+      itemBuilder: (context, index) {
+        final confirmation = filteredDocs[index].data() as Map<String, dynamic>;
+        final postId = confirmation['postId'];
+        final otherUserId = (confirmation['ownerId'] == currentUser.uid)
+            ? confirmation['requesterId']
+            : confirmation['ownerId'];
+
+        return FutureBuilder<DocumentSnapshot>(
+          future: _firestore.collection('posts').doc(postId).get(),
+          builder: (context, postSnap) {
+            if (!postSnap.hasData || !postSnap.data!.exists) {
+              return const SizedBox.shrink();
+            }
+
+            final post = postSnap.data!.data() as Map<String, dynamic>;
 
             return FutureBuilder<DocumentSnapshot>(
-              future: _firestore.collection('posts').doc(postId).get(),
-              builder: (context, postSnap) {
-                if (postSnap.connectionState == ConnectionState.waiting) {
-                  return const SizedBox.shrink();
+              future: _firestore.collection('users').doc(otherUserId).get(),
+              builder: (context, userSnap) {
+                if (!userSnap.hasData || !userSnap.data!.exists) {
+                  return const SizedBox();
                 }
 
-                if (!postSnap.hasData || !postSnap.data!.exists) {
-                  return const Text("ไม่พบโพสต์นี้ 😢");
-                }
+                final user = userSnap.data!.data() as Map<String, dynamic>?;
 
-                final post = postSnap.data!.data() as Map<String, dynamic>;
+                final fullName =
+                    '${user?['firstname'] ?? ''} ${user?['lastname'] ?? ''}'.trim();
+                final displayName = fullName.isNotEmpty
+                    ? fullName
+                    : user?['username'] ?? 'ไม่ระบุ';
 
-                return FutureBuilder<DocumentSnapshot>(
-                  future: _firestore.collection('users').doc(otherUserId).get(),
-                  builder: (context, userSnap) {
-                    if (userSnap.connectionState == ConnectionState.waiting) {
-                      return const SizedBox.shrink();
-                    }
-                    if (!userSnap.hasData || !userSnap.data!.exists) {
-                      return const SizedBox();
-                    }
+                final data = {
+                  'type': confirmation['type'],
+                  'status': confirmation['status'],
+                  'otherUserName': displayName,
+                  'timestamp': confirmation['createdAt']
+                          ?.toDate()
+                          .toString()
+                          .substring(0, 16) ??
+                      '',
+                  'points': confirmation['pointsAwarded'] ?? 0,
+                  'postTitle': post['title'] ?? 'ไม่ระบุชื่อโพสต์',
+                  'postImage': (post['images'] != null &&
+                          post['images'].isNotEmpty &&
+                          post['images'][0].toString().startsWith('http'))
+                      ? post['images'][0]
+                      : null,
+                  'userImg': user?['profileImage'],
+                  'otherUserId': otherUserId,
+                  'confirmId':
+                      confirmation['confirmationId'] ?? filteredDocs[index].id,
+                };
 
-                    final user = userSnap.data!.data() as Map<String, dynamic>?;
-
-                    final data = {
-                      'type': confirmation['type'],
-                      'status': confirmation['status'],
-                      'otherUserName': user?['username'],
-                      'timestamp': confirmation['createdAt']?.toDate().toString().substring(0, 16) ?? '',
-                      'points': confirmation['pointsAwarded'] ?? 0,
-                      'postTitle': post['title'] ?? 'ไม่ระบุชื่อโพสต์',
-                      'postImage': (post['images'] != null &&
-                              post['images'].isNotEmpty &&
-                              post['images'][0].toString().startsWith('http'))
-                          ? post['images'][0]
-                          : null,
-                      'userImg': user?['profileImage'],
-                    };
-
-                    return GestureDetector(
-                        onTap: () {
-                          final confirmationDoc = filteredDocs[index];
-                          final confirmData = confirmationDoc.data() as Map<String, dynamic>;
-
-                          // ข้อมูลจาก post และ user ที่โหลดใน FutureBuilder อยู่แล้ว
-                          final postData = postSnap.data!.data() as Map<String, dynamic>;
-                          final userData = userSnap.data!.data() as Map<String, dynamic>;
-
-                          // debug print ช่วยเช็กว่าข้อมูลครบไหม
-                          print("📦 ส่งข้อมูลไปหน้า detail: ${{
-                            ...confirmData,
-                            'postTitle': postData['title'],
-                            'otherUserName': userData['username'],
-                            'postImage': postData['images']?[0],
-                            'timestamp': confirmData['createdAt']?.toDate().toString(),
-                            'type': confirmData['type'],
-                          }}");
-
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => HistoryDetailPage(
-                                data: {
-                                  ...confirmData,
-                                  'confirmId': confirmationDoc.id,
-                                  'isOwner': confirmData['ownerId'] == FirebaseAuth.instance.currentUser!.uid,
-                                  'isRequester': confirmData['requesterId'] == FirebaseAuth.instance.currentUser!.uid,
-                                  'postTitle': postData['title'] ?? 'ไม่ระบุชื่อโพสต์',
-                                  'postImage': (postData['images'] != null &&
-                                                postData['images'].isNotEmpty &&
-                                                postData['images'][0].toString().startsWith('http'))
-                                      ? postData['images'][0]
-                                      : null,
-                                  'otherUserName': userData['username'] ?? 'ไม่ระบุ',
-                                  'timestamp': confirmData['createdAt']?.toDate().toString().substring(0, 16) ?? '-',
-                                  'type': confirmData['type'] ?? 'donate',
-                                },
-                              ),
-                            ),
-                          );
-                        },
-
-                      child: _buildDealCard(data),
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => HistoryDetailPage(
+                          data: {
+                            ...confirmation,
+                            'confirmId': filteredDocs[index].id,
+                            'isOwner': confirmation['ownerId'] ==
+                                FirebaseAuth.instance.currentUser!.uid,
+                            'isRequester': confirmation['requesterId'] ==
+                                FirebaseAuth.instance.currentUser!.uid,
+                            'postTitle': post['title'] ?? 'ไม่ระบุชื่อโพสต์',
+                            'postImage': (post['images'] != null &&
+                                    post['images'].isNotEmpty &&
+                                    post['images'][0]
+                                        .toString()
+                                        .startsWith('http'))
+                                ? post['images'][0]
+                                : null,
+                            'otherUserName': displayName,
+                            'timestamp': confirmation['createdAt']
+                                    ?.toDate()
+                                    .toString()
+                                    .substring(0, 16) ??
+                                '-',
+                            'type': confirmation['type'] ?? 'donate',
+                          },
+                        ),
+                      ),
                     );
                   },
+                  child: _buildDealCard(data),
                 );
               },
             );
@@ -605,5 +781,8 @@ class _HistoryPageState extends State<HistoryPage>
         );
       },
     );
+  },
+);
 }
 }
+

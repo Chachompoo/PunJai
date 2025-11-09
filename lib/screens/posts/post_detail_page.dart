@@ -216,7 +216,12 @@ class _PostDetailPageState extends State<PostDetailPage> {
                 ? 'มีคนเสนอของบริจาคให้คุณ 💗'
                 : 'มีคนอยากแลกของกับคุณ 💙',
         'postId': postId,    
-        'type': 'request',
+        'type': type == 'donate'
+          ? 'deal_request'
+          : type == 'request'
+              ? 'deal_offer'
+              : 'deal_swap',
+
         'isRead': false,
         'createdAt': timestamp,
       });
@@ -250,6 +255,8 @@ class _PostDetailPageState extends State<PostDetailPage> {
     final images = data['images'] ?? [];
     final videos = data['videos'] ?? [];
     final mediaCount = images.length + (videos.isNotEmpty ? 1 : 0);
+    final quantity = (widget.postData['quantity'] ?? 0) as int;
+    final isOutOfStock = (type == 'donate') && quantity <= 0;
 
     final accentColor = type == 'donate'
         ? const Color(0xFFFFC83C)
@@ -619,44 +626,53 @@ Padding(
                       ],
                     ),
                     child: ElevatedButton(
-                      onPressed: isOwner
-                          ? () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      EditPostPage(postData: data),
-                                ),
-                              )
-                              : _alreadyRequested || _isCheckingRequest
-                                ? null // ❌ ปิดปุ่มถ้ากำลังเช็กหรือเคยขอไปแล้ว
-                                : () async {
-                                    await _sendRequest(context);
-                                    setState(() => _alreadyRequested = true); // ✅ อัปเดตสถานะทันที
-                                  },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.transparent,
-                        shadowColor: Colors.transparent,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(40),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
+                    onPressed: isOwner
+                        ? () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => EditPostPage(postData: data),
+                              ),
+                            )
+                        : isOutOfStock || _alreadyRequested || _isCheckingRequest
+                            ? null // ❌ ปิดปุ่มถ้าของหมด, เคยขอไปแล้ว, หรือกำลังเช็ก
+                            : () async {
+                                await _sendRequest(context);
+                                setState(() => _alreadyRequested = true);
+                              },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isOutOfStock
+                          ? Colors.grey.shade400
+                          : type == 'donate'
+                              ? const Color(0xFFFFD84D)
+                              : type == 'request'
+                                  ? const Color(0xFFFF8FBF)
+                                  : const Color(0xFF7EC8E3),
+                      shadowColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(40),
                       ),
-                      child: Text(
-                        isOwner
-                            ? 'แก้ไขโพสต์ ✏️'
-                            : _alreadyRequested
-                                ? 'รอการตอบรับ ⏳'
-                                : type == 'donate'
-                                    ? 'ขอรับสิ่งของ 💛'
-                                    : type == 'request'
-                                        ? 'ขอบริจาค 💗'
-                                        : 'ขอแลกเปลี่ยน 💙',
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: Text(
+                      isOwner
+                          ? 'แก้ไขโพสต์ ✏️'
+                          : isOutOfStock
+                              ? 'บริจาคครบแล้ว 💖'
+                              : _alreadyRequested
+                                  ? 'รอการตอบรับ ⏳'
+                                  : type == 'donate'
+                                      ? 'ขอรับสิ่งของ 💛'
+                                      : type == 'request'
+                                          ? 'ขอบริจาค 💗'
+                                          : 'ขอแลกเปลี่ยน 💙',
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
+                    ),
+
+
                     ),
                   );
                 }),

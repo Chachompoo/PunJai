@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:uuid/uuid.dart';
+
 
 class HistoryDetailPage extends StatefulWidget {
   final Map<String, dynamic> data;
@@ -9,7 +12,10 @@ class HistoryDetailPage extends StatefulWidget {
   State<HistoryDetailPage> createState() => _HistoryDetailPageState();
 }
 
+
+
 class _HistoryDetailPageState extends State<HistoryDetailPage>
+  
     with TickerProviderStateMixin {
   static const kBg = Color(0xFFFFF7FB);
   static const kPrimary = Color(0xFFFF8FB1);
@@ -22,9 +28,195 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
   late AnimationController _pulseController;
   late List<Animation<double>> _fadeAnimations;
 
+  // 🔐 Firebase
+  final _auth = FirebaseAuth.instance;
+  final _firestore = FirebaseFirestore.instance;
+
+  // ⭐ รีวิว/แต้ม
+  bool _canReview = false;     // โชว์ปุ่มรีวิวได้ไหม (เฉพาะผู้รับ + completed + ยังไม่เคยรีวิว)
+  bool _hasReviewed = false;   // เคยรีวิวแล้วหรือยัง (จาก confirmations.isReviewed)
+  bool _isReceiver = false;    // ฉันคือผู้รับไหม (current.uid == requesterId)
+  String? _targetUserId;       // user ที่จะถูกรีวิว (donate/request => ownerId, swap => อีกฝั่ง)
+  String? _confirmationId;     // id ของดีลนี้ (จาก widget.data['confirmId'])
+
+
   @override
   void initState() {
     super.initState();
+
+    int _countValidItems(dynamic raw) {
+      try {
+        final list = (raw as List?) ?? const [];
+        // นับเฉพาะสตริงที่ไม่ว่าง
+        return list.where((e) => (e is String) && e.trim().isNotEmpty).length;
+      } catch (_) {
+        return 0;
+      }
+    }
+
+    Future<void> _handleReviewPermissionAndPoints() async {
+  try {
+    final current = _auth.currentUser;
+    if (current == null) return;
+
+    // id ดีลมาจาก data ของหน้าปัจจุบัน
+    final confirmId = widget.data['confirmId'];
+    if (confirmId == null || (confirmId is String && confirmId.isEmpty)) return;
+    _confirmationId = confirmId;
+
+    final snap = await _firestore.collection('confirmations').doc(confirmId).get();
+    if (!snap.exists) return;
+    final c = snap.data()!;
+
+    // ====== อ่านฟิลด์ตามสกีมของชมพู ======
+    final ownerId        = (c['ownerId']        ?? '') as String; // ผู้บริจาค
+    final requesterId    = (c['requesterId']    ?? '') as String; // ผู้รับ
+    final type           = (c['type']           ?? '') as String; // 'donate' | 'request' | 'swap'
+    final status         = (c['status']         ?? '') as String; // 'pending'|'accepted'|'shipping'|'completed'
+    final isReviewed     = (c['isReviewed']     ?? false) as bool;
+    final pointsAwarded  = (c['pointsAwarded']  ?? 0) as num;     // กันแต้มซ้ำ (number)
+    final shippingItems  = c['shippingItems'];                    // array of string
+
+    final isRequester = current.uid == requesterId;
+    final isOwner     = current.uid == ownerId;
+    _isReceiver = isRequester;
+
+    // ====== 1) ตัดสินใจสิทธิ์รีวิว ======
+    bool canReview = false;
+    String? target;
+
+    if (status == 'completed') {
+      if (type == 'donate' || type == 'request') {
+        // ผู้รับรีวิวผู้บริจาคเท่านั้น
+        if (isRequester) { canReview = true; target = ownerId; }
+      } else if (type == 'swap') {
+        // แลกเปลี่ยน: ทั้งสองฝ่ายรีวิวกันได้
+        canReview = true;
+        target = isRequester ? ownerId : requesterId;
+      }
+    }
+
+    // ====== 2) ให้แต้มผู้บริจาค (เฉพาะ donate/request + completed + ยังไม่ได้ให้) ======
+    // แต้ม = จำนวนชิ้นที่ส่ง = shippingItems.length (นับเฉพาะรายการที่ไม่ว่าง)
+    if ((type == 'donate' || type == 'request') &&
+        status == 'completed' &&
+        pointsAwarded == 0) {
+      final award = _countValidItems(shippingItems);
+      if (award > 0) {
+        // อัปเดตแต้มให้ owner
+        await _firestore.collection('users').doc(ownerId).update({
+          'points': FieldValue.increment(award),
+        });
+        // กันซ้ำด้วยการบันทึกยอดแต้มที่ให้แล้ว
+        await _firestore.collection('confirmations').doc(confirmId).update({
+          'pointsAwarded': award,
+        });
+        // แจ้งเตือนให้ผู้บริจาคทราบ
+        await _firestore.collection('notifications').add({
+          'type': 'points_awarded',
+          'fromUserId': 'system',
+          'toUserId': ownerId,
+          'confirmationId': confirmId,
+          'message': 'ได้รับ +$award คะแนนจากการบริจาค 💗',
+          'isRead': false,
+          'createdAt': Timestamp.now(),
+        });
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _canReview   = canReview && !isReviewed;
+      _hasReviewed = isReviewed;
+      _targetUserId = target;
+    });
+  } catch (e) {
+    debugPrint('handleReviewPermissionAndPoints error: $e');
+  }
+}
+
+  Future<void> _submitReview(String comment, double rating) async {
+  try {
+    final current = _auth.currentUser;
+    if (current == null || _targetUserId == null || _confirmationId == null) return;
+
+    // 1) บันทึกรีวิว
+    await _firestore.collection('reviews').add({
+      'reviewId': const Uuid().v4(),
+      'reviewerId': current.uid,
+      'reviewedUserId': _targetUserId,
+      'dealId': _confirmationId,
+      'comment': comment,
+      'rating': rating,
+      'createdAt': Timestamp.now(),
+    });
+
+    // 2) เซ็ต flag กันรีวิวซ้ำ
+    await _firestore.collection('confirmations').doc(_confirmationId!).update({
+      'isReviewed': true,
+    });
+
+    // 3) แจ้งเตือนผู้ถูกรีวิว
+    await _firestore.collection('notifications').add({
+      'type': 'review_received',
+      'fromUserId': current.uid,
+      'toUserId': _targetUserId,
+      'confirmationId': _confirmationId,
+      'message': '⭐ คุณได้รับรีวิวใหม่จาก ${current.displayName ?? "ผู้ใช้ PunJai"}!',
+      'isRead': false,
+      'createdAt': Timestamp.now(),
+    });
+
+    // 4) คำนวณคะแนนเฉลี่ย + trustScore แล้วอัปเดตที่ users
+    final reviewsSnap = await _firestore
+        .collection('reviews')
+        .where('reviewedUserId', isEqualTo: _targetUserId)
+        .get();
+
+    if (reviewsSnap.docs.isNotEmpty) {
+      double total = 0;
+      for (final d in reviewsSnap.docs) {
+        total += (d['rating'] ?? 0).toDouble();
+      }
+      final avg = total / reviewsSnap.docs.length;
+      final count = reviewsSnap.docs.length;
+      final trust = (avg * 20).clamp(0, 100); // สูตรที่ตกลงกัน
+
+      await _firestore.collection('users').doc(_targetUserId).update({
+        'rating': double.parse(avg.toStringAsFixed(2)),
+        'ratingCount': count,
+        'trustScore': trust,
+      });
+
+      await _firestore.collection('notifications').add({
+        'type': 'trust_updated',
+        'fromUserId': 'system',
+        'toUserId': _targetUserId,
+        'message': '⭐ คะแนนความน่าเชื่อถืออัปเดตเป็น ${avg.toStringAsFixed(1)} ดาว!',
+        'isRead': false,
+        'createdAt': Timestamp.now(),
+      });
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _canReview = false;
+      _hasReviewed = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('ส่งรีวิวเรียบร้อยแล้ว 💖')),
+    );
+  } catch (e) {
+    debugPrint('submitReview error: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ส่งรีวิวไม่สำเร็จ ลองใหม่อีกครั้งนะคะ')),
+      );
+    }
+  }
+}
+
+
 
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1200),
@@ -46,6 +238,9 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
     )..repeat(reverse: true);
 
     _fadeController.forward();
+    // ✅ โหลดสิทธิ์รีวิว + ให้แต้มถ้ายังไม่ให้
+  _handleReviewPermissionAndPoints();
+
   }
 
   @override
@@ -54,6 +249,93 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
     _pulseController.dispose();
     super.dispose();
   }
+
+  // =====================================================
+// 🌸 ฟังก์ชันส่งรีวิวและอัปเดต Trust Score
+// =====================================================
+Future<void> _submitReview(String comment, double rating) async {
+  try {
+    final current = FirebaseAuth.instance.currentUser;
+    if (current == null || _targetUserId == null || _confirmationId == null) return;
+
+    final firestore = FirebaseFirestore.instance;
+
+    // 1️⃣ บันทึกรีวิวใหม่
+    await firestore.collection('reviews').add({
+      'reviewId': const Uuid().v4(),
+      'reviewerId': current.uid,
+      'reviewedUserId': _targetUserId,
+      'dealId': _confirmationId,
+      'comment': comment,
+      'rating': rating,
+      'createdAt': Timestamp.now(),
+    });
+
+    // 2️⃣ ป้องกันการรีวิวซ้ำ
+    await firestore.collection('confirmations').doc(_confirmationId!).update({
+      'isReviewed': true,
+    });
+
+    // 3️⃣ แจ้งเตือนผู้ถูกรีวิว
+    await firestore.collection('notifications').add({
+      'type': 'review_received',
+      'fromUserId': current.uid,
+      'toUserId': _targetUserId,
+      'confirmationId': _confirmationId,
+      'message': '⭐ คุณได้รับรีวิวใหม่จาก ${current.displayName ?? "ผู้ใช้ PunJai"}!',
+      'isRead': false,
+      'createdAt': Timestamp.now(),
+    });
+
+    // 4️⃣ คำนวณค่าเฉลี่ยใหม่ของคะแนน
+    final reviewsSnap = await firestore
+        .collection('reviews')
+        .where('reviewedUserId', isEqualTo: _targetUserId)
+        .get();
+
+    if (reviewsSnap.docs.isNotEmpty) {
+      double total = 0;
+      for (final d in reviewsSnap.docs) {
+        total += (d['rating'] ?? 0).toDouble();
+      }
+      final avg = total / reviewsSnap.docs.length;
+      final count = reviewsSnap.docs.length;
+      final trust = (avg * 20).clamp(0, 100); // 5 ดาว = 100 คะแนน
+
+      await firestore.collection('users').doc(_targetUserId).update({
+        'rating': double.parse(avg.toStringAsFixed(2)),
+        'ratingCount': count,
+        'trustScore': trust,
+      });
+
+      // แจ้งเตือนการอัปเดต trust score
+      await firestore.collection('notifications').add({
+        'type': 'trust_updated',
+        'fromUserId': 'system',
+        'toUserId': _targetUserId,
+        'message': '⭐ คะแนนความน่าเชื่อถืออัปเดตเป็น ${avg.toStringAsFixed(1)} ดาว!',
+        'isRead': false,
+        'createdAt': Timestamp.now(),
+      });
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _canReview = false;
+      _hasReviewed = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('ส่งรีวิวเรียบร้อยแล้ว 💖')),
+    );
+  } catch (e) {
+    debugPrint('submitReview error: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ส่งรีวิวไม่สำเร็จ ลองใหม่อีกครั้งนะคะ')),
+      );
+    }
+  }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -425,58 +707,9 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
               ),
               const SizedBox(width: 12),
             ],
-
-            if ((status == 'accepted' || status == 'in_progress') && data['isOwner'] == true) ...[
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Color(0xFFFFB84C),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                  ),
-                  onPressed: () async {
-                    final firestore = FirebaseFirestore.instance;
-                    final confirmId = data['confirmId'];
-                    final ownerId = data['ownerId'];
-                    final requesterId = data['requesterId'];
-                    final itemSent = data['itemSent'] ?? 0;
-
-                    // ✅ 1. เปลี่ยนสถานะเป็น completed
-                    await firestore.collection('confirmations').doc(confirmId).update({
-                      'status': 'completed',
-                      'updatedAt': FieldValue.serverTimestamp(),
-                    });
-
-                    // ✅ 2. เพิ่มคะแนนให้ผู้บริจาค
-                    if (itemSent > 0) {
-                      await firestore.collection('users').doc(ownerId).update({
-                        'points': FieldValue.increment(itemSent),
-                      });
-
-                      // ✅ 3. แจ้งเตือนว่าผู้บริจาคได้รับคะแนนแล้ว
-                      await firestore.collection('notifications').add({
-                        'toUserId': ownerId,
-                        'fromUserId': requesterId,
-                        'type': 'points_awarded',
-                        'message': 'ได้รับ +$itemSent คะแนนจากการบริจาค 💗',
-                        'isRead': false,
-                        'createdAt': FieldValue.serverTimestamp(),
-                      });
-                    }
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('✅ ยืนยันรับพัสดุเรียบร้อย!')),
-                    );
-                  },
-                  child: const Text("ยืนยันรับพัสดุ ✅"),
-                ),
-              ),
-              const SizedBox(width: 12),
-            ],
-                            ],
-                          ),
-                        ),
+          ],
+        ),
+      ),
                         // ✅ ปุ่มสำหรับประเภท "แลกเปลี่ยน (swap)"
             if (type == 'swap' && status == 'accepted') ...[
               Expanded(
@@ -526,37 +759,38 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                   ),
                   onPressed: () async {
-                    final firestore = FirebaseFirestore.instance;
-                    final confirmId = data['confirmId'];
-                    final ownerId = data['ownerId'];
-                    final requesterId = data['requesterId'];
-                    final itemSent = data['itemSent'] ?? 0;
+                  final firestore = FirebaseFirestore.instance;
+                  final confirmId = data['confirmId'];
+                  final ownerId = data['ownerId'];
+                  final requesterId = data['requesterId'];
+                  final itemSent = data['itemSent'] ?? 0;
 
-                    // ✅ 1. เปลี่ยนสถานะเป็น completed
-                    await firestore.collection('confirmations').doc(confirmId).update({
-                      'status': 'completed',
-                      'updatedAt': FieldValue.serverTimestamp(),
+                  // ✅ 1. เปลี่ยนสถานะเป็น completed + บันทึกแต้มที่ได้รับ
+                  await firestore.collection('confirmations').doc(confirmId).update({
+                    'status': 'completed',
+                    'pointsAwarded': itemSent, // 🌟 เพิ่มบรรทัดนี้
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  });
+
+                  // ✅ 2. เพิ่มคะแนนให้ผู้บริจาค
+                  if (itemSent > 0) {
+                    await firestore.collection('users').doc(ownerId).update({
+                      'points': FieldValue.increment(itemSent),
                     });
 
-                    // ✅ 2. เพิ่มคะแนนให้ผู้บริจาค
-                    if (itemSent > 0) {
-                      await firestore.collection('users').doc(ownerId).update({
-                        'points': FieldValue.increment(itemSent),
-                      });
+                    // ✅ 3. แจ้งเตือนว่าผู้บริจาคได้รับคะแนนแล้ว
+                    await firestore.collection('notifications').add({
+                      'toUserId': ownerId,
+                      'fromUserId': requesterId,
+                      'type': 'points_awarded',
+                      'message': 'ได้รับ +$itemSent คะแนนจากการบริจาค 💗',
+                      'isRead': false,
+                      'createdAt': FieldValue.serverTimestamp(),
+                    });
+                  }
 
-                      // ✅ 3. แจ้งเตือนว่าผู้บริจาคได้รับคะแนนแล้ว
-                      await firestore.collection('notifications').add({
-                        'toUserId': ownerId,
-                        'fromUserId': requesterId,
-                        'type': 'points_awarded',
-                        'message': 'ได้รับ +$itemSent คะแนนจากการบริจาค 💗',
-                        'isRead': false,
-                        'createdAt': FieldValue.serverTimestamp(),
-                      });
-                    }
-
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('✅ ยืนยันรับพัสดุเรียบร้อย!')),
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('✅ ยืนยันรับพัสดุเรียบร้อย!')),
                     );
                   },
                   child: const Text("ยืนยันรับพัสดุ ✅"),
@@ -613,11 +847,95 @@ class _HistoryDetailPageState extends State<HistoryDetailPage>
                   child: const Text("ยืนยันรับพัสดุ ✅"),
                 ),
               ),
-              const SizedBox(width: 12),
-            ]
+                            const SizedBox(width: 12),
+            ],
+
+            // 🌸 ปุ่มรีวิว (เพิ่มใหม่ — อยู่หลังปุ่มทั้งหมด)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.star_rate_rounded, color: Colors.white),
+                label: Text(
+                  (status == 'completed')
+                      ? (_isReceiver
+                          ? (_hasReviewed ? 'รีวิวแล้ว' : 'รีวิวผู้บริจาค 💗')
+                          : 'รีวิวไม่ได้')
+                      : 'ยังรีวิวไม่ได้ (ดีลยังไม่เสร็จ)',
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: (status == 'completed')
+                      ? (_isReceiver
+                          ? (_hasReviewed
+                              ? const Color(0xFFBDBDBD)
+                              : const Color(0xFFFF8FB1))
+                          : const Color(0xFFBDBDBD))
+                      : const Color(0xFFBDBDBD),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15)),
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+                ),
+                onPressed: (status != 'completed' || !_isReceiver || _hasReviewed)
+                    ? null
+                    : () {
+                        double rating = 5;
+                        final commentCtrl = TextEditingController();
+                        showDialog(
+                          context: context,
+                          builder: (_) => StatefulBuilder(
+                            builder: (context, setSt) {
+                              return AlertDialog(
+                                title: const Text('ให้คะแนนดีลนี้'),
+                                content: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    TextField(
+                                      controller: commentCtrl,
+                                      decoration: const InputDecoration(
+                                        hintText:
+                                            'เขียนความคิดเห็นถึงผู้บริจาค...',
+                                      ),
+                                      maxLines: 3,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Slider(
+                                      value: rating,
+                                      min: 1,
+                                      max: 5,
+                                      divisions: 4,
+                                      label: '${rating.round()} ดาว',
+                                      onChanged: (v) => setSt(() => rating = v),
+                                    ),
+                                  ],
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('ยกเลิก'),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () async {
+                                      await _submitReview(
+                                          commentCtrl.text.trim(), rating);
+                                      if (context.mounted)
+                                        Navigator.pop(context);
+                                    },
+                                    child: const Text('ส่งรีวิว'),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        );
+                      },
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 }
+
+    
